@@ -4,6 +4,18 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>划词谷歌翻译</title>
         <item>
+            <title>1.5.6</title>
+            <pubDate>Tue, 06 Oct 2026 16:01:06 +0800</pubDate>
+            <link>https://github.com/Foolishgod/quick-google-translate</link>
+            <sparkle:version>13</sparkle:version>
+            <sparkle:shortVersionString>1.5.6</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-1.5.6.zip" length="1383017" type="application/octet-stream" sparkle:edSignature="/GgwEI+EmmVVYzEYodfHa65GX8a3j+IlGxRS3nu1fOS7e+jMSpQdf52fqtBSyh0eVILR2Tblj8vseUyrOHtTCg=="></enclosure>
+            <sparkle:deltas>
+                <enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-13-7.delta" length="128606" type="application/octet-stream" sparkle:deltaFrom="7" sparkle:edSignature="WDPNn6A8NDt+5rvQ94QH8TrExGrkJG2TsYmWXe84opA6Y4BhASLXDaL+rWURjIXPakdLvMN2p0jD7NXDRxn8Bw=="></enclosure><enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-13-8.delta" length="114330" type="application/octet-stream" sparkle:deltaFrom="8" sparkle:edSignature="3pbj7MAet87ezM7w9R/djGDHSmXwN52GWp5M0WtQBbzcOVJ8iKYGkTfwLoqeKQ/0FzhDH7VXYlEB6AVrEx/8BA=="></enclosure><enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-13-9.delta" length="112954" type="application/octet-stream" sparkle:deltaFrom="9" sparkle:edSignature="sc4tmpeo/UDaC0xk0Tq94Sefi3tSyfr8a3ttcxgULhZ8mm9PAsvbAgLinGTBJXPFdTBhBhu+H40P+1kLilyrDA=="></enclosure><enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-13-10.delta" length="103054" type="application/octet-stream" sparkle:deltaFrom="10" sparkle:edSignature="+OOcpqTYWM8AZ3vz+o/0t5V+4fVoPz6De+i9VFsQxnqJRoARzH3YOSk/89S+4YXoZgE7PoRaZlxeNhZMbgG9Aw=="></enclosure><enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-13-11.delta" length="88058" type="application/octet-stream" sparkle:deltaFrom="11" sparkle:edSignature="aWOitxxYdwQfdzrYEU5PM9+ZFDlfaGrpdeSHml2MbmRufAGglrS9mcakrTCimWAxtFKpZi4eqBireb5dotQsBg=="></enclosure><enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-13-12.delta" length="56490" type="application/octet-stream" sparkle:deltaFrom="12" sparkle:edSignature="dAySsEqxXcySF76W//7gb7NltP6UeH6Qgqe3A67STTchvyvkDTdbEutDG4vIXc+M1i044dis2Ns1YDKggFDCCA=="></enclosure></sparkle:deltas>
+        </item>
+        <item>
             <title>1.5.5</title>
             <pubDate>Tue, 06 Oct 2026 15:45:12 +0800</pubDate>
             <link>https://github.com/Foolishgod/quick-google-translate</link>
@@ -13,7 +25,12 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-1.5.5.zip" length="1376316" type="application/octet-stream" sparkle:edSignature="sbAClFUraywkFTtnrW0R8Fu4C5sA9+okDlxDPchxiHYky2lxbB5WSu85zPmQ+dpTDtwh7yw5GlLZEDMIFLiEBA=="></enclosure>
             <sparkle:deltas>
-                <enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-12-7.delta" length="121102" type="application/octet-stream" sparkle:deltaFrom="7" sparkle:edSignature="XnKdJi6b6vVyZd9P4tFKJQUv/WnBtTkWuGrqTzLdMROl6sAIkWf4wcPPMhiNfdEGgnqcu9MbWUJJMLG3/27VAQ=="></enclosure><enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-12-8.delta" length="106226" type="application/octet-stream" sparkle:deltaFrom="8" sparkle:edSignature="w+jI2fJ0pvVNMm03xd2iH5WLSgKIlQggWjXmd7r2MeE/A0tYE01ZcIfqYmtWbEGPXtS13wxQTNcJWdyrrzmjDQ=="></enclosure><enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-12-9.delta" length="104738" type="application/octet-stream" sparkle:deltaFrom="9" sparkle:edSignature="o8sydegtmwPfATmFevGJfPLbH6V9YEvZLdkHwydhEtAw93Cpa76g3YdVRRaNOCGJkxeMrO8eCFLFQO7E6DQuBA=="></enclosure><enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-12-10.delta" length="94198" type="application/octet-stream" sparkle:deltaFrom="10" sparkle:edSignature="QKwz6/nI+9fs1+uG8JhCar07Jr283UXTXS90tvwg/0CujHekRN2Mb8So5Yrt0el7JDp1j3hpBfHYmANSuN5RDQ=="></enclosure><enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-12-11.delta" length="78894" type="application/octet-stream" sparkle:deltaFrom="11" sparkle:edSignature="BmoD+TDtk/HRtDq+L7gSfxQjiFlLIxhpOsYF0RBPJveimVOZB82AoVQ69kdVjISv2zbP8fQMju22PSJW/kBMDg=="></enclosure></sparkle:deltas>
+                <enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-12-7.delta" length="121102" type="application/octet-stream" sparkle:deltaFrom="7" sparkle:edSignature="XnKdJi6b6vVyZd9P4tFKJQUv/WnBtTkWuGrqTzLdMROl6sAIkWf4wcPPMhiNfdEGgnqcu9MbWUJJMLG3/27VAQ=="></enclosure>
+                <enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-12-8.delta" length="106226" type="application/octet-stream" sparkle:deltaFrom="8" sparkle:edSignature="w+jI2fJ0pvVNMm03xd2iH5WLSgKIlQggWjXmd7r2MeE/A0tYE01ZcIfqYmtWbEGPXtS13wxQTNcJWdyrrzmjDQ=="></enclosure>
+                <enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-12-9.delta" length="104738" type="application/octet-stream" sparkle:deltaFrom="9" sparkle:edSignature="o8sydegtmwPfATmFevGJfPLbH6V9YEvZLdkHwydhEtAw93Cpa76g3YdVRRaNOCGJkxeMrO8eCFLFQO7E6DQuBA=="></enclosure>
+                <enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-12-10.delta" length="94198" type="application/octet-stream" sparkle:deltaFrom="10" sparkle:edSignature="QKwz6/nI+9fs1+uG8JhCar07Jr283UXTXS90tvwg/0CujHekRN2Mb8So5Yrt0el7JDp1j3hpBfHYmANSuN5RDQ=="></enclosure>
+                <enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-12-11.delta" length="78894" type="application/octet-stream" sparkle:deltaFrom="11" sparkle:edSignature="BmoD+TDtk/HRtDq+L7gSfxQjiFlLIxhpOsYF0RBPJveimVOZB82AoVQ69kdVjISv2zbP8fQMju22PSJW/kBMDg=="></enclosure>
+            </sparkle:deltas>
         </item>
         <item>
             <title>1.5.4</title>
@@ -60,21 +77,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
                 <enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-9-8.delta" length="5466" type="application/octet-stream" sparkle:deltaFrom="8" sparkle:edSignature="Rqkeh+6Rtc/MWNNpKc3ET7BMMPsJjM59TLfzf2GnnfG24P0EYts+vlfhllcyIL9zPzkaPPV4kDTx19XazIm2Bg=="></enclosure>
             </sparkle:deltas>
         </item>
-        <item>
-            <title>1.5.1</title>
-            <pubDate>Tue, 06 Oct 2026 13:32:59 +0800</pubDate>
-            <link>https://github.com/Foolishgod/quick-google-translate</link>
-            <sparkle:version>8</sparkle:version>
-            <sparkle:shortVersionString>1.5.1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-1.5.1.zip" length="1330509" type="application/octet-stream" sparkle:edSignature="YHx5RiaBLcvV30egO2n0h4R3Vt6adqxIuw6Ohvg3CuNSCeLshG9idTpShCWO0wo82POcLe7xCx5eaEiRbLGMCQ=="></enclosure>
-            <sparkle:deltas>
-                <enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-8-7.delta" length="55166" type="application/octet-stream" sparkle:deltaFrom="7" sparkle:edSignature="UL6PFafO5Xt7Xjvpple14uow7Z4wyUvmHbMDG8QN6tM4nQ7y80eLaFKy8sR+8VRLWCvjdmItC0bFRgTNjSBHBw=="></enclosure>
-            </sparkle:deltas>
-        </item>
     </channel>
 </rss><!-- sparkle-signatures:
-edSignature: ouUP0XXYVszV775bEgKr3LzTDb8+emeBYL2qEwi/ohedeJ3niqWizlc0oIIheQwDGaFM+Br2/ZYGu8IqR6E/Bg==
-length: 9723
+edSignature: epR0b8uf36Zo5+a4Z4KcJBULtPoMN0sdpipkRpbzrEty1TW3nCTSLk/IYFsX1Pd4u0e5DQl39l92ir5sdqIpCg==
+length: 11403
 -->
