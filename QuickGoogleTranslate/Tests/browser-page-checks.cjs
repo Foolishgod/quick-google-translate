@@ -19,7 +19,8 @@ async function fixture({mode='Advanced', hasControl=true, disabled=false, hostna
   const input=new TextArea();
   const button={...visible, disabled, get innerText(){return mode}, click(){clicked=true}};
   const option={...visible, innerText:'Advanced Improved accuracy, built with Gemini', click(){if(!switchFails)mode='Advanced'}};
-  const segment={...visible, get textContent(){reads++;return output}};
+  const content={nodeType:3,get textContent(){reads++;return output}};
+  const segment={...visible,nodeType:1,tagName:'SPAN',childNodes:[content],contains(el){return el===this || el===content}};
   const document={readyState:ready?'complete':'loading', querySelectorAll(selector) {
     if(selector.startsWith('button,'))return hasControl?[button]:[];
     if(selector.startsWith('[role="menuitem"'))return menu?[option]:[];

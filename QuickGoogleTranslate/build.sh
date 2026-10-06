@@ -3,7 +3,7 @@ set -eu
 cd "${0:A:h}"
 APP="dist/划词谷歌翻译.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks" .build/module-cache
-swiftc -swift-version 5 -O -target arm64-apple-macosx13.0 -module-cache-path .build/module-cache Sources/main.swift Sources/KeyboardShortcut.swift Sources/TranslationService.swift Sources/AccessibilityPermission.swift Sources/ChromeBridge.swift Sources/BackgroundBrowser.swift Sources/AppMaintenance.swift -F Vendor/Sparkle -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks -o "$APP/Contents/MacOS/QuickGoogleTranslate" -framework AppKit -framework WebKit -framework Carbon -framework ApplicationServices -framework Security -framework Network
+swiftc -swift-version 5 -O -target arm64-apple-macosx13.0 -module-cache-path .build/module-cache Sources/main.swift Sources/KeyboardShortcut.swift Sources/TranslationLayout.swift Sources/TranslationService.swift Sources/AccessibilityPermission.swift Sources/ChromeBridge.swift Sources/BackgroundBrowser.swift Sources/AppMaintenance.swift -F Vendor/Sparkle -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks -o "$APP/Contents/MacOS/QuickGoogleTranslate" -framework AppKit -framework WebKit -framework Carbon -framework ApplicationServices -framework Security -framework Network
 cp Info.plist "$APP/Contents/Info.plist"
 cp BrowserTranslate.js "$APP/Contents/Resources/BrowserTranslate.js"
 /usr/bin/ditto Vendor/Sparkle/Sparkle.framework "$APP/Contents/Frameworks/Sparkle.framework"

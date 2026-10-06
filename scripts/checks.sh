@@ -3,10 +3,14 @@ set -eu
 cd "${0:A:h:h}"
 MODULE="QuickGoogleTranslate"
 mkdir -p "$MODULE/.build/module-cache" QuickGoogleTranslateUninstaller/.build/module-cache
-COMMON=("$MODULE/Sources/TranslationService.swift" "$MODULE/Sources/ChromeBridge.swift" "$MODULE/Sources/BackgroundBrowser.swift")
+COMMON=("$MODULE/Sources/TranslationLayout.swift" "$MODULE/Sources/TranslationService.swift" "$MODULE/Sources/ChromeBridge.swift" "$MODULE/Sources/BackgroundBrowser.swift")
 FRAMEWORKS=(-framework AppKit -framework WebKit -framework ApplicationServices -framework Security -framework Network)
 swiftc -swift-version 5 -O -module-cache-path "$MODULE/.build/module-cache" "${COMMON[@]}" "$MODULE/Sources/AccessibilityPermission.swift" "$MODULE/Tests/main.swift" "${FRAMEWORKS[@]}" -o "$MODULE/.build/source-core-checks"
 "$MODULE/.build/source-core-checks"
+if [[ "${1:-}" == "--native" || "${1:-}" == "--chrome" ]]; then
+    swiftc -swift-version 5 -O -module-cache-path "$MODULE/.build/module-cache" "${COMMON[@]}" "$MODULE/Tests/Formatting/main.swift" "${FRAMEWORKS[@]}" -o "$MODULE/.build/source-formatting-checks"
+    "$MODULE/.build/source-formatting-checks"
+fi
 swiftc -swift-version 5 -O -module-cache-path QuickGoogleTranslateUninstaller/.build/module-cache QuickGoogleTranslateUninstaller/Sources/UninstallPlan.swift QuickGoogleTranslateUninstaller/Tests/main.swift -framework AppKit -framework Security -o QuickGoogleTranslateUninstaller/.build/source-uninstall-checks
 QuickGoogleTranslateUninstaller/.build/source-uninstall-checks
 if command -v node >/dev/null 2>&1; then

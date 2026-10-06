@@ -10,7 +10,7 @@ func rejects(_ text: String) -> Bool {
 }
 check(rejects("  \n\t"), "reject empty selections")
 check(rejects(String(repeating: "中", count: 5001)), "enforce character limit")
-check(try TranslationRequest.normalize("\n Hello \n世界 \n") == "Hello \n世界", "preserve internal line breaks")
+check(try TranslationRequest.normalize("\n Hello \n世界 \n") == " Hello \n世界 ", "preserve multiline indentation and internal line breaks")
 let input = "选中中文 & a+b? #\n第二行 😀"
 let url = TranslationRequest.pageURL(text: input, target: "zh-TW")
 let items = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!

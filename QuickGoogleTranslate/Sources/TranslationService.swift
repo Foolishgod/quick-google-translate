@@ -4,7 +4,11 @@ import Security
 
 struct TranslationRequest {
     static func normalize(_ raw: String) throws -> String {
-        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        var lines = normalized.components(separatedBy: "\n")
+        while lines.first?.trimmingCharacters(in: .whitespaces).isEmpty == true { lines.removeFirst() }
+        while lines.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { lines.removeLast() }
+        let value = lines.count > 1 ? lines.joined(separator: "\n") : normalized.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { throw TranslationError.message("请先选中一段文字。") }
         guard value.count <= 5000 else { throw TranslationError.message("文字太长，请选取 5,000 字以内的内容。") }
         return value
@@ -82,30 +86,56 @@ final class TranslationService: NSObject, WKNavigationDelegate {
     var timer: Timer?
     var completion: ((Result<String, Error>) -> Void)?
     var token = UUID()
+    var unitToken = UUID()
+    var layout: TranslationLayout?
+    var unitResults: [String] = []
+    var targetLanguage = ""
+    var unitTranslatorForVerification: ((String, String, @escaping (Result<String, Error>) -> Void) -> Void)?
     var polling = false
     func cancel() {
         token = UUID()
+        clearTransport()
+        layout = nil; unitResults = []; completion = nil
+    }
+    func clearTransport() {
+        unitToken = UUID()
         ChromeBridge.shared.cancel()
         BackgroundBrowser.shared.cancelTranslation()
         task?.cancel(); task = nil
         timer?.invalidate(); timer = nil
         web?.stopLoading(); web?.navigationDelegate = nil; web = nil
-        navigation = nil; completion = nil; polling = false
+        navigation = nil; polling = false
     }
     func translate(text: String, target: String, completion: @escaping (Result<String, Error>) -> Void) {
         cancel()
-        let requestToken = token
         self.completion = completion
+        layout = TranslationLayout(text)
+        targetLanguage = target
+        if layout!.requests.isEmpty {
+            let output = layout!.assemble([])
+            cancel(); completion(.success(output)); return
+        }
+        translateRaw(text: layout!.requests[0], target: target)
+    }
+    func translateRaw(text: String, target: String) {
+        let requestToken = unitToken
+        if let translator = unitTranslatorForVerification {
+            translator(text, target) { [weak self] result in
+                guard let self, self.unitToken == requestToken else { return }
+                self.finish(result)
+            }
+            return
+        }
         if UserDefaults.standard.string(forKey: "translationBackend") == "browser" {
             BackgroundBrowser.shared.translate(text: text, source: UserDefaults.standard.string(forKey: "chromeSourceLanguage") ?? "en", target: target) { [weak self] result in
-                guard let self, self.token == requestToken else { return }
+                guard let self, self.unitToken == requestToken else { return }
                 self.finish(result)
             }
             return
         }
         if UserDefaults.standard.string(forKey: "translationBackend") == "chrome" {
             ChromeBridge.shared.translate(text: text, source: UserDefaults.standard.string(forKey: "chromeSourceLanguage") ?? "en", target: target) { [weak self] result in
-                guard let self, self.token == requestToken else { return }
+                guard let self, self.unitToken == requestToken else { return }
                 self.finish(result)
             }
             return
@@ -129,14 +159,14 @@ final class TranslationService: NSObject, WKNavigationDelegate {
                     request.timeoutInterval = 4
                 }
                 let (data, response) = try await URLSession.shared.data(for: request)
-                guard self.token == requestToken, !Task.isCancelled else { return }
+                guard self.unitToken == requestToken, !Task.isCancelled else { return }
                 guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                     throw TranslationError.message(key == nil ? "Google 连接暂不可用。" : "Google Cloud 连接失败，请检查密钥、API 启用状态和配额。")
                 }
                 let result = try key == nil ? TranslationRequest.parsePublicResponse(data) : TranslationRequest.parseOfficialResponse(data)
                 self.finish(.success(result))
             } catch {
-                guard self.token == requestToken, !Task.isCancelled else { return }
+                guard self.unitToken == requestToken, !Task.isCancelled else { return }
                 if key == nil { self.loadBackgroundPage(text: text, target: target, token: requestToken) }
                 else { self.finish(.failure(error)) }
             }
@@ -151,7 +181,7 @@ final class TranslationService: NSObject, WKNavigationDelegate {
         navigation = view.load(URLRequest(url: TranslationRequest.pageURL(text: text, target: target), timeoutInterval: 20))
         var ticks = 0
         timer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
-            guard let self, self.token == token else { return }
+            guard let self, self.unitToken == token else { return }
             ticks += 1
             if ticks >= 65 {
                 self.finish(.failure(TranslationError.message("未能获取 Google 译文。请检查网络后重试；Google 可能正在限流或要求网页确认。")))
@@ -164,31 +194,51 @@ final class TranslationService: NSObject, WKNavigationDelegate {
         guard webView === web, navigation === self.navigation else { return }
         polling = true
     }
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { failedPage(error) }
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { failedPage(error) }
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        guard webView === web, navigation === self.navigation else { return }; failedPage(error)
+    }
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        guard webView === web, navigation === self.navigation else { return }; failedPage(error)
+    }
     func failedPage(_ error: Error) {
         if (error as NSError).code != NSURLErrorCancelled { finish(.failure(TranslationError.message("无法连接 Google，请检查网络后重试。"))) }
     }
     func pollPage(token: UUID) {
         let script = """
         (() => {
-          const containers = [...document.querySelectorAll('[data-language-for-alternatives]')];
-          for (const container of containers) {
-            const segments = [...container.querySelectorAll('span.ryNqvb')];
-            const text = segments.map(s => s.textContent).join('');
-            if (text.trim()) return text;
-          }
-          const segments = [...document.querySelectorAll('span.ryNqvb')];
-          const text = segments.map(s => s.textContent).join('');
-          return text.trim() ? text : null;
+          const segments = [...document.querySelectorAll('span.ryNqvb')].filter(el => el.getClientRects().length);
+          if (!segments.length) return null;
+          let root = segments[0];
+          while (root.parentElement && !segments.every(el => root.contains(el))) root = root.parentElement;
+          const walk = (node, inside = false) => {
+            if (node.nodeType === 3) return inside || /^\\s*$/.test(node.textContent) ? node.textContent : '';
+            if (node.nodeType !== 1) return '';
+            if (node.tagName === 'BR') return '\\n';
+            const selected = inside || segments.includes(node);
+            if (!selected && !segments.some(el => node.contains(el))) return '';
+            const text = [...node.childNodes].map(child => walk(child, selected)).join('');
+            return /^(DIV|P|LI|SECTION|TR)$/.test(node.tagName) && text ? text + '\\n' : text;
+          };
+          return walk(root).trim() || null;
         })()
         """
         web?.evaluateJavaScript(script) { [weak self] result, _ in
-            guard let self, self.token == token, let text = result as? String, !text.isEmpty else { return }
+            guard let self, self.unitToken == token, let text = result as? String, !text.isEmpty else { return }
             self.finish(.success(text))
         }
     }
     func finish(_ result: Result<String, Error>) {
+        if case .success(let text) = result, let layout {
+            unitResults.append(text)
+            if unitResults.count < layout.requests.count {
+                clearTransport()
+                translateRaw(text: layout.requests[unitResults.count], target: targetLanguage)
+                return
+            }
+            let output = layout.assemble(unitResults)
+            let callback = completion
+            cancel(); callback?(.success(output)); return
+        }
         let callback = completion
         cancel()
         callback?(result)

@@ -9,11 +9,11 @@ const chrome=process.env.QGT_TEST_CHROME||'/Applications/Google Chrome.app/Conte
 const profile=fs.mkdtempSync(path.join(os.tmpdir(),'qgt-dom-test-'));
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const child=spawn(chrome,['--headless=new','--no-first-run','--no-default-browser-check','--disable-background-networking','--host-resolver-rules=MAP * ~NOTFOUND','--remote-debugging-port=0','--remote-debugging-address=127.0.0.1','--user-data-dir='+profile,'about:blank'],{stdio:'ignore'});
-const html=`<!doctype html><meta charset="utf-8"><button id="model">Classic</button><div id="menu" role="menu" hidden><button role="menuitem" id="advanced">Advanced Gemini</button></div><textarea></textarea><span class="ryNqvb"></span><script>
-window.fixtureInputs=[];let version=0;const input=document.querySelector('textarea'),output=document.querySelector('span');
+const html=`<!doctype html><meta charset="utf-8"><button id="model">Classic</button><div id="menu" role="menu" hidden><button role="menuitem" id="advanced">Advanced Gemini</button></div><textarea></textarea><div id="output"></div><script>
+window.fixtureInputs=[];let version=0;const input=document.querySelector('textarea'),output=document.querySelector('#output');
 document.querySelector('#model').onclick=()=>document.querySelector('#menu').hidden=false;
 document.querySelector('#advanced').onclick=()=>{document.querySelector('#model').innerText='Advanced';document.querySelector('#menu').hidden=true;};
-input.addEventListener('input',()=>{const id=++version,text=input.value;window.fixtureInputs.push(text);output.textContent='';if(text)setTimeout(()=>{if(id===version)output.textContent='译文:'+text;},150);});
+input.addEventListener('input',()=>{const id=++version,text=input.value;window.fixtureInputs.push(text);output.textContent='';if(text)setTimeout(()=>{if(id===version)('译文:'+text).split('\\n').forEach((line,index)=>{if(index)output.append(document.createElement('br'));const span=document.createElement('span');span.className='ryNqvb';span.textContent=line;output.append(span);});},150);});
 </script>`;
 let socket,counter=0,pending=new Map(),loads=0;
 async function call(method,params={},sessionId){
@@ -45,7 +45,7 @@ async function call(method,params={},sessionId){
   const code=fs.readFileSync('QuickGoogleTranslate/BrowserTranslate.js','utf8');
   async function translate(text,id){return (await call('Runtime.evaluate',{expression:'('+code+')('+JSON.stringify({id,text})+')',awaitPromise:true,returnByValue:true},sessionId)).result.value;}
   const baseline=loads;
-  for(const [i,text] of ['one','two','two','中文\n多行 & < > 😀'].entries()){
+  for(const [i,text] of ['one','two','two','中文\n多行 & < > 😀','• 第一条\n• 第二条\n\n段落'].entries()){
     const result=await translate(text,'request-'+i);assert.equal(result.model,'advanced');assert.equal(result.text,'译文:'+text);
   }
   assert.equal(loads,baseline,'warm DOM translations must not navigate');

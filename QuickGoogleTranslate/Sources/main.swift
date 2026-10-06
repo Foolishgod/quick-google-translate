@@ -44,6 +44,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var translatedText = ""
     var message: NSTextField!
     var languageLabel: NSTextField!
+    var pinButton: NSButton!
+    var isPinned = false
+    var panelPresented = false
+    var outsideClickMonitor: Any?
+    var localClickMonitor: Any?
+    var activationObserver: NSObjectProtocol?
+    var sourceFormatting: NSAttributedString?
     var settings: NSWindow?
     var permissionLabel: NSTextField?
     var permissionTimer: Timer?
@@ -66,6 +73,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let languages = [("简体中文", "zh-CN"), ("繁體中文", "zh-TW"), ("English", "en"), ("日本語", "ja"), ("한국어", "ko"), ("Français", "fr"), ("Deutsch", "de"), ("Español", "es")]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if CommandLine.arguments.contains("--verify-pinning") {
+            verifyPinning(); NSApp.terminate(nil); return
+        }
         if CommandLine.arguments.contains("--verify-selection") {
             verifySelectionHotkey()
             NSApp.terminate(nil)
@@ -130,6 +140,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             sourceView.string = "Select any word or sentence, then press your shortcut."
             sourceText = sourceView.string
             resultView.string = "选中任意单词或句子，然后按下快捷键。"
+            if CommandLine.arguments.contains("--preview-format") {
+                self.panel.setContentSize(NSSize(width: 570, height: 640))
+                self.sourceText = "• UGTA Debugger: attacks the nearest zombie on the same row.\n• AI Cannon: attacks every zombie up to CANNON_RANGE cells to the right.\n• Redbird Bomb: attacks every zombie in a 3×3 block.\n• Coffeeflower and Wall: produce no markers."
+                self.translatedText = "• UGTA 调试器：攻击同一行中距离最近的僵尸。\n• AI 大炮：攻击右侧 CANNON_RANGE 范围内的所有僵尸。\n• 红鸟炸弹：攻击 3×3 区域内的所有僵尸。\n• 咖啡花与墙：不生成攻击标记。"
+                self.sourceView.textStorage?.setAttributedString(SelectionFormatting.display(nil, text: self.sourceText, size: 15))
+                self.resultView.textStorage?.setAttributedString(SelectionFormatting.display(nil, text: self.translatedText, size: 19))
+            }
             message.stringValue = "新选区翻译 · 同文关闭 · Esc"
             copyButton.isEnabled = true
             panel.appearance = NSAppearance(named: .aqua)
@@ -233,7 +250,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return (scroll, text)
     }
     func createPanel() {
-        panel = TranslationPanel(contentRect: NSRect(x: 0, y: 0, width: 480, height: 390), styleMask: [.titled, .closable, .resizable, .nonactivatingPanel, .fullSizeContentView], backing: .buffered, defer: false)
+        panel = TranslationPanel(contentRect: NSRect(x: 0, y: 0, width: 520, height: 520), styleMask: [.titled, .closable, .resizable, .nonactivatingPanel, .fullSizeContentView], backing: .buffered, defer: false)
         panel.title = "划词翻译"
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
@@ -241,8 +258,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.isMovableByWindowBackground = true
-        panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.level = .normal
+        panel.hidesOnDeactivate = true
+        panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
         panel.minSize = NSSize(width: 400, height: 360)
         panel.delegate = self
@@ -261,6 +279,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         languageLabel.font = .systemFont(ofSize: 11)
         languageLabel.textColor = .secondaryLabelColor
         languageLabel.lineBreakMode = .byTruncatingTail
+        pinButton = NSButton(title: "置顶", target: self, action: #selector(togglePin))
+        pinButton.bezelStyle = .rounded
+        pinButton.controlSize = .small
+        updatePinAppearance()
         let originalCard = GlassCard(frame: .zero)
         let translatedCard = GlassCard(frame: .zero)
         let originalLabel = NSTextField(labelWithString: "原文")
@@ -294,7 +316,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let footer = NSStackView(views: [spinner, message, retryButton, copyButton])
         footer.distribution = .fill
         footer.spacing = 8
-        for view in [title, languageLabel!, originalCard, translatedCard, footer] {
+        for view in [title, languageLabel!, pinButton!, originalCard, translatedCard, footer] {
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
@@ -316,8 +338,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             title.topAnchor.constraint(equalTo: root.topAnchor, constant: 12),
             title.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 86),
             languageLabel.centerYAnchor.constraint(equalTo: title.centerYAnchor),
-            languageLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
+            languageLabel.trailingAnchor.constraint(equalTo: pinButton.leadingAnchor, constant: -10),
             languageLabel.leadingAnchor.constraint(greaterThanOrEqualTo: title.trailingAnchor, constant: 12),
+            pinButton.centerYAnchor.constraint(equalTo: title.centerYAnchor),
+            pinButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
             originalCard.topAnchor.constraint(equalTo: root.topAnchor, constant: 46),
             originalCard.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
             originalCard.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
@@ -418,12 +442,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         check(!busy && reads.isEmpty, "Selection reader returns to idle")
         print("All selection-aware shortcut checks passed; no network, clipboard or permissions changed.")
     }
-    func consumeSelection(_ raw: String) {
+    func consumeSelection(_ raw: String, formatting: NSAttributedString? = nil) {
         let text: String
         do { text = try TranslationRequest.normalize(raw) }
         catch { selectionFailed(error.localizedDescription); return }
-        if panel.isVisible && text == sourceText { closePanel() }
-        else { showTranslation(text) }
+        if panel.isVisible && text.trimmingCharacters(in: .whitespacesAndNewlines) == sourceText.trimmingCharacters(in: .whitespacesAndNewlines) { closePanel() }
+        else { showTranslation(text, formatting: formatting) }
     }
     func selectionFailed(_ text: String) {
         if panel.isVisible {
@@ -446,6 +470,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if sender === panel { closePanel(); return false }
         return true
+    }
+    func windowDidResignKey(_ notification: Notification) {
+        if notification.object as? NSWindow === panel { hideForOutsideInteraction() }
+    }
+    func hideForOutsideInteraction() {
+        guard panelPresented, !isPinned else { return }
+        closePanel()
+    }
+    func beginOutsideMonitoring() {
+        guard outsideClickMonitor == nil else { return }
+        let events: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: events) { [weak self] _ in self?.hideForOutsideInteraction() }
+        localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: events) { [weak self] event in
+            if let self, event.window !== self.panel { self.hideForOutsideInteraction() }
+            return event
+        }
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+            self?.hideForOutsideInteraction()
+        }
+    }
+    func endOutsideMonitoring() {
+        if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
+        if let localClickMonitor { NSEvent.removeMonitor(localClickMonitor) }
+        if let activationObserver { NSWorkspace.shared.notificationCenter.removeObserver(activationObserver) }
+        outsideClickMonitor = nil; localClickMonitor = nil; activationObserver = nil
+    }
+    func updatePinAppearance() {
+        pinButton.title = isPinned ? "已置顶" : "置顶"
+        pinButton.image = NSImage(systemSymbolName: isPinned ? "pin.fill" : "pin", accessibilityDescription: nil)
+        pinButton.imagePosition = .imageLeading
+        pinButton.contentTintColor = isPinned ? .systemBlue : .secondaryLabelColor
+        pinButton.toolTip = isPinned ? "取消置顶；点击其他窗口后自动隐藏" : "开启置顶；切换窗口后继续显示"
+        pinButton.setAccessibilityLabel(isPinned ? "取消置顶" : "开启置顶")
+    }
+    @objc func togglePin() {
+        isPinned.toggle()
+        panel.hidesOnDeactivate = !isPinned
+        panel.level = isPinned ? .floating : .normal
+        panel.collectionBehavior = isPinned ? [.canJoinAllSpaces, .fullScreenAuxiliary] : [.moveToActiveSpace, .fullScreenAuxiliary]
+        updatePinAppearance()
+        if panelPresented { panel.orderFrontRegardless() }
+    }
+    func verifyPinning() {
+        createPanel()
+        func check(_ condition: Bool, _ label: String) { precondition(condition, label); print("PASS: " + label) }
+        var late: ((Result<String, Error>) -> Void)?
+        translatorForVerification = { _, _, complete in late = complete }
+        showTranslation("• First: item\n• Second: item")
+        check(!isPinned && panel.level == .normal && panel.hidesOnDeactivate, "Default panel is unpinned")
+        check(outsideClickMonitor != nil && localClickMonitor != nil && activationObserver != nil, "Monitor clicks in the same app, other apps and activation changes")
+        hideForOutsideInteraction()
+        check(!panel.isVisible && outsideClickMonitor == nil, "Outside interaction hides and removes monitors")
+        late?(.success("Late result"))
+        check(!panel.isVisible && !copyButton.isEnabled, "Hidden panel ignores late translation")
+        showTranslation("Pinned text")
+        togglePin()
+        check(isPinned && panel.level == .floating && !panel.hidesOnDeactivate && pinButton.title == "已置顶", "Dedicated pin button enables persistent floating mode")
+        hideForOutsideInteraction()
+        check(panel.isVisible, "Pinned panel survives outside clicks")
+        let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
+        other.makeKeyAndOrderFront(nil)
+        check(panel.isVisible, "Pinned panel survives another window becoming key")
+        panel.makeKeyAndOrderFront(nil)
+        togglePin()
+        hideForOutsideInteraction()
+        check(!panel.isVisible && !isPinned, "Unpin restores automatic hiding")
+        showTranslation("Close while pinned"); togglePin(); panel.cancelOperation(nil)
+        check(!panel.isVisible && localClickMonitor == nil, "Escape still closes a pinned panel")
+        other.orderOut(nil)
+        print("All pinning checks passed; no preferences or permissions changed.")
     }
     func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
         var value: CFTypeRef?
@@ -510,13 +606,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     AXUIElementSetAttributeValue(window, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
                 }
             }
+            var plainSelection: String?
             for attempt in 0..<(isChromium ? 3 : 1) {
                 if attempt > 0 { try? await Task.sleep(nanoseconds: 150_000_000) }
                 guard self.selectionRevision == revision else { return }
                 guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
                     self.selectionFailed("请回到选中文字的软件后重试。"); return
                 }
-                if let text = self.selectedText(in: application) { self.consumeSelection(text); return }
+                if let text = self.selectedText(in: application) {
+                    if text.isEmpty { self.consumeSelection(text); return }
+                    plainSelection = text
+                    // Chromium text markers can flatten list boundaries. Prefer its
+                    // copied HTML/RTF, with AX text retained if copying is unavailable.
+                    if !isChromium && !text.contains("\n") { self.consumeSelection(text); return }
+                    break
+                }
             }
             var attempts = 0
             while !NSEvent.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty && attempts < 120 {
@@ -554,13 +658,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             commandUp.postToPid(pid)
             var copied: String?
             var copiedCount: Int?
+            var formatting: NSAttributedString?
             for _ in 0..<60 {
                 try? await Task.sleep(nanoseconds: 30_000_000)
                 guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { break }
                 if clipboard.changeCount != before {
                     // Chrome can publish clipboard formats in stages.
                     if let value = clipboard.string(forType: .string), !value.isEmpty {
-                        copied = value; copiedCount = clipboard.changeCount; break
+                        copied = value; copiedCount = clipboard.changeCount
+                        formatting = SelectionFormatting.fromClipboard(clipboard)
+                        if let formatting, !formatting.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { copied = formatting.string }
+                        break
                     }
                 }
             }
@@ -575,12 +683,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             // Always release the copy chord and restore its clipboard before retiring a stale read.
             guard self.selectionRevision == revision else { return }
-            if let copied { self.consumeSelection(copied) }
+            if let copied { self.consumeSelection(copied, formatting: formatting) }
+            else if let plainSelection { self.consumeSelection(plainSelection) }
             else { self.selectionFailed("没有读到选区。请确认辅助功能权限已开启，也可先按 ⌘C，再从菜单选择“翻译剪贴板”。") }
         }
     }
 
     func presentPanel() {
+        panelPresented = true
+        beginOutsideMonitoring()
         if !panel.isVisible {
             let point = NSEvent.mouseLocation
             let screen = NSScreen.screens.first { $0.frame.contains(point) } ?? NSScreen.main
@@ -598,6 +709,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         translationService.cancel()
         spinner.stopAnimation(nil)
         sourceText = ""; translatedText = ""
+        sourceFormatting = nil
         sourceView.string = ""
         resultView.string = text
         resultView.textColor = .labelColor
@@ -607,7 +719,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         retryButton.isHidden = true
         presentPanel()
     }
-    func showTranslation(_ raw: String) {
+    func showTranslation(_ raw: String, formatting: NSAttributedString? = nil) {
         let text: String
         do { text = try TranslationRequest.normalize(raw) }
         catch { showMessage(error.localizedDescription); return }
@@ -617,8 +729,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let sourceName = chrome ? (languages.first(where: { $0.1 == source })?.0 ?? source) : "自动识别"
         languageLabel.stringValue = sourceName + " → " + (languages.first(where: { $0.1 == target })?.0 ?? target)
         sourceText = text; translatedText = ""
+        sourceFormatting = formatting
         message.toolTip = nil
-        sourceView.string = text
+        sourceView.textStorage?.setAttributedString(SelectionFormatting.display(formatting, text: text, size: 15))
         sourceView.scrollRangeToVisible(NSRange(location: 0, length: 0))
         resultView.string = "正在翻译…"
         resultView.textColor = .secondaryLabelColor
@@ -636,7 +749,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             switch result {
             case .success(let translated):
                 self.translatedText = translated
-                self.resultView.string = translated
+                self.resultView.textStorage?.setAttributedString(SelectionFormatting.display(nil, text: translated, size: 19))
                 self.resultView.scrollRangeToVisible(NSRange(location: 0, length: 0))
                 self.copyButton.isEnabled = true
                 self.message.stringValue = "新选区翻译 · 同文关闭 · Esc"
@@ -652,7 +765,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } else { translationService.translate(text: text, target: target, completion: completion) }
     }
     @objc func retryTranslation() {
-        if !sourceText.isEmpty { invalidateSelectionReads(); showTranslation(sourceText) }
+        if !sourceText.isEmpty { invalidateSelectionReads(); showTranslation(sourceText, formatting: sourceFormatting) }
     }
     @objc func copyTranslation() {
         guard !translatedText.isEmpty else { return }
@@ -662,9 +775,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     @objc func translateClipboard() {
         invalidateSelectionReads()
-        showTranslation(NSPasteboard.general.string(forType: .string) ?? "")
+        let clipboard = NSPasteboard.general
+        let formatting = SelectionFormatting.fromClipboard(clipboard)
+        showTranslation(formatting?.string ?? clipboard.string(forType: .string) ?? "", formatting: formatting)
     }
     @objc func closePanel() {
+        panelPresented = false
+        endOutsideMonitoring()
         invalidateSelectionReads()
         generation += 1
         translationService.cancel()

@@ -4,7 +4,22 @@ async request => {
   const advanced = /高级|進階|advanced/i;
   const classic = /经典|經典|classic|fast|快速/i;
   const control = () => [...document.querySelectorAll('button,[role="button"]')].find(el => visible(el) && !el.closest('[role="menu"]') && el.innerText.trim().length < 100 && (advanced.test(el.innerText) || classic.test(el.innerText)));
-  const result = () => [...document.querySelectorAll('span.ryNqvb')].filter(visible).map(el => el.textContent).join('');
+  const result = () => {
+    const segments = [...document.querySelectorAll('span.ryNqvb')].filter(visible);
+    if (!segments.length) return '';
+    let root = segments[0];
+    while (root.parentElement && !segments.every(el => root.contains(el))) root = root.parentElement;
+    const walk = (node, inside = false) => {
+      if (node.nodeType === 3) return inside || /^\s*$/.test(node.textContent) ? node.textContent : '';
+      if (node.nodeType !== 1) return '';
+      if (node.tagName === 'BR') return '\n';
+      const selected = inside || segments.includes(node);
+      if (!selected && !segments.some(el => node.contains(el))) return '';
+      const text = [...node.childNodes].map(child => walk(child, selected)).join('');
+      return /^(DIV|P|LI|SECTION|TR)$/.test(node.tagName) && text ? text + '\n' : text;
+    };
+    return walk(root).replace(/\n[\t ]+\n/g, '\n\n').trim();
+  };
   const busy = () => [...document.querySelectorAll('[aria-busy="true"],[role="progressbar"]')].some(visible);
   window.__qgtRequest = request.id;
   const current = () => {
