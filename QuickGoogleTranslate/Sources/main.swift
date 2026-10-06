@@ -47,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var pinButton: NSButton!
     var isPinned = false
     var panelPresented = false
+    var presentedSourcePID: pid_t?
     var outsideClickMonitor: Any?
     var localClickMonitor: Any?
     var activationObserver: NSObjectProtocol?
@@ -73,6 +74,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let languages = [("简体中文", "zh-CN"), ("繁體中文", "zh-TW"), ("English", "en"), ("日本語", "ja"), ("한국어", "ko"), ("Français", "fr"), ("Deutsch", "de"), ("Español", "es")]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let index = CommandLine.arguments.firstIndex(of: "--verify-foreground"), CommandLine.arguments.count > index + 1 {
+            verifyForegroundPopup(URL(fileURLWithPath: CommandLine.arguments[index + 1])); return
+        }
         if CommandLine.arguments.contains("--verify-pinning") {
             verifyPinning(); NSApp.terminate(nil); return
         }
@@ -258,8 +262,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.isMovableByWindowBackground = true
-        panel.level = .normal
-        panel.hidesOnDeactivate = true
+        // A nonactivating panel must be above the foreground app while visible.
+        // Persistence is controlled by the pin button and actual outside events.
+        panel.level = .floating
+        panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
         panel.minSize = NSSize(width: 400, height: 360)
@@ -471,8 +477,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if sender === panel { closePanel(); return false }
         return true
     }
-    func windowDidResignKey(_ notification: Notification) {
-        if notification.object as? NSWindow === panel { hideForOutsideInteraction() }
+    func handleApplicationActivation(_ pid: pid_t) {
+        guard pid != ProcessInfo.processInfo.processIdentifier, pid != presentedSourcePID else { return }
+        hideForOutsideInteraction()
     }
     func hideForOutsideInteraction() {
         guard panelPresented, !isPinned else { return }
@@ -489,7 +496,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                   app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
-            self?.hideForOutsideInteraction()
+            self?.handleApplicationActivation(app.processIdentifier)
         }
     }
     func endOutsideMonitoring() {
@@ -508,8 +515,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     @objc func togglePin() {
         isPinned.toggle()
-        panel.hidesOnDeactivate = !isPinned
-        panel.level = isPinned ? .floating : .normal
+        panel.hidesOnDeactivate = false
+        panel.level = .floating
         panel.collectionBehavior = isPinned ? [.canJoinAllSpaces, .fullScreenAuxiliary] : [.moveToActiveSpace, .fullScreenAuxiliary]
         updatePinAppearance()
         if panelPresented { panel.orderFrontRegardless() }
@@ -520,7 +527,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         var late: ((Result<String, Error>) -> Void)?
         translatorForVerification = { _, _, complete in late = complete }
         showTranslation("• First: item\n• Second: item")
-        check(!isPinned && panel.level == .normal && panel.hidesOnDeactivate, "Default panel is unpinned")
+        check(!isPinned && panel.level == .floating && !panel.hidesOnDeactivate, "Unpinned popup appears above the foreground app without implicit hiding")
+        if let pid = presentedSourcePID { handleApplicationActivation(pid) }
+        check(panel.isVisible, "Pending activation of the source app does not hide the popup")
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: panel)
+        check(panel.isVisible, "Focus changes alone do not dismiss the nonactivating popup")
         check(outsideClickMonitor != nil && localClickMonitor != nil && activationObserver != nil, "Monitor clicks in the same app, other apps and activation changes")
         hideForOutsideInteraction()
         check(!panel.isVisible && outsideClickMonitor == nil, "Outside interaction hides and removes monitors")
@@ -542,6 +553,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         check(!panel.isVisible && localClickMonitor == nil, "Escape still closes a pinned panel")
         other.orderOut(nil)
         print("All pinning checks passed; no preferences or permissions changed.")
+    }
+    func verifyForegroundPopup(_ helper: URL) {
+        NSApp.setActivationPolicy(.accessory)
+        let previous = NSWorkspace.shared.frontmostApplication
+        let child = Process(); child.executableURL = helper
+        child.standardOutput = FileHandle.nullDevice; child.standardError = FileHandle.nullDevice
+        do { try child.run() } catch { print("FAIL: foreground fixture launch"); exit(1) }
+        Task { @MainActor in
+            defer {
+                if child.isRunning { child.terminate() }
+                previous?.activate(options: .activateIgnoringOtherApps)
+            }
+            for _ in 0..<60 {
+                if NSWorkspace.shared.frontmostApplication?.processIdentifier == child.processIdentifier { break }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            precondition(NSWorkspace.shared.frontmostApplication?.processIdentifier == child.processIdentifier, "Separate fixture must be the active application")
+            createPanel()
+            translatorForVerification = { _, _, _ in }
+            showTranslation("Foreground popup regression")
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            precondition(panel.isVisible && panelPresented, "Unpinned popup must remain visible after activation events settle")
+            precondition(NSWorkspace.shared.frontmostApplication?.processIdentifier == child.processIdentifier, "Popup must preserve the source application focus")
+            let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as! [[String: Any]]
+            let popup = windows.firstIndex { ($0[kCGWindowNumber as String] as? Int) == panel.windowNumber }!
+            let source = windows.firstIndex { ($0[kCGWindowOwnerPID as String] as? Int32) == child.processIdentifier && ($0[kCGWindowLayer as String] as? Int) == 0 }!
+            precondition(popup < source, "Popup must actually be above the other application's window")
+            print("PASS: unpinned popup stays above a separate foreground app without taking application focus")
+            handleApplicationActivation(child.processIdentifier)
+            precondition(panel.isVisible, "Source activation cannot dismiss the new popup")
+            hideForOutsideInteraction()
+            precondition(!panel.isVisible, "Actual outside interaction still hides an unpinned popup")
+            showTranslation("Pinned popup regression"); pinButton.performClick(nil)
+            handleApplicationActivation(child.processIdentifier + 100000)
+            precondition(panel.isVisible && isPinned, "Pinned popup survives switching applications")
+            closePanel()
+            print("PASS: outside hiding and pin persistence remain intact")
+            if child.isRunning { child.terminate() }
+            previous?.activate(options: .activateIgnoringOtherApps)
+            NSApp.terminate(nil)
+        }
     }
     func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
         var value: CFTypeRef?
@@ -690,6 +742,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func presentPanel() {
+        if !panelPresented { presentedSourcePID = NSWorkspace.shared.frontmostApplication?.processIdentifier }
         panelPresented = true
         beginOutsideMonitoring()
         if !panel.isVisible {
@@ -703,6 +756,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
         panel.makeKeyAndOrderFront(nil)
+        panel.orderFrontRegardless()
     }
     func showMessage(_ text: String) {
         generation += 1
@@ -781,6 +835,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     @objc func closePanel() {
         panelPresented = false
+        presentedSourcePID = nil
         endOutsideMonitoring()
         invalidateSelectionReads()
         generation += 1

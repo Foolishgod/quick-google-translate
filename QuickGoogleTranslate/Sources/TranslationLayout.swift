@@ -40,15 +40,90 @@ struct TranslationLayout {
 }
 
 struct SelectionFormatting {
-    // Only import resource-free structural HTML. Strip all attributes and unsafe
-    // elements before AppKit sees it; copied images/CSS cannot make network calls.
+    // Decode structural HTML locally. Copied images/CSS never reach a renderer.
     static func fromClipboard(_ clipboard: NSPasteboard) -> NSAttributedString? {
         if let data = clipboard.data(forType: .rtf), data.count < 1_000_000,
            let text = try? NSAttributedString(data: data, options: [.documentType: NSAttributedString.DocumentType.rtf], documentAttributes: nil) { return text }
         guard let data = clipboard.data(forType: .html), data.count < 1_000_000,
               let html = String(data: data, encoding: .utf8) else { return nil }
         let clean = sanitizeHTML(html)
-        return try? NSAttributedString(data: Data(clean.utf8), options: [.documentType: NSAttributedString.DocumentType.html, .characterEncoding: String.Encoding.utf8.rawValue], documentAttributes: nil)
+        return parseHTML(clean)
+    }
+    // Tolerant, resource-free tokenizer. No WebKit, HTML importing service or
+    // nested event loop runs while the shortcut handler owns a clipboard snapshot.
+    static func parseHTML(_ html: String) -> NSAttributedString {
+        let output = NSMutableAttributedString(string: "")
+        let tokenizer = try! NSRegularExpression(pattern: #"(?is)<\s*(/?)\s*([a-z][a-z0-9]*)\b[^>]*>|[^<]+|<"#)
+        var strong = 0, italic = 0, code = 0, pre = 0
+        var lists: [(ordered: Bool, count: Int)] = []
+        func append(_ text: String) {
+            var font = code > 0 || pre > 0 ? NSFont.monospacedSystemFont(ofSize: 15, weight: .regular) : NSFont.systemFont(ofSize: 15)
+            if strong > 0 { font = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask) }
+            if italic > 0 { font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask) }
+            output.append(NSAttributedString(string: text, attributes: [.font: font]))
+        }
+        func boundary(_ count: Int = 1) {
+            guard output.length > 0 else { return }
+            let existing = output.string.reversed().prefix { $0 == "\n" }.count
+            if existing < count { append(String(repeating: "\n", count: count - existing)) }
+        }
+        for match in tokenizer.matches(in: html, range: NSRange(html.startIndex..., in: html)) {
+            if output.length > 20000 { break }
+            guard let range = Range(match.range, in: html) else { continue }
+            if let nameRange = Range(match.range(at: 2), in: html) {
+                let name = html[nameRange].lowercased()
+                let closing = match.range(at: 1).length > 0
+                let delta = closing ? -1 : 1
+                switch name {
+                case "b", "strong", "h1", "h2", "h3", "h4", "h5", "h6":
+                    if name.hasPrefix("h") { boundary() }
+                    strong = max(0, strong + delta)
+                case "i", "em": italic = max(0, italic + delta)
+                case "code": code = max(0, code + delta)
+                case "pre": boundary(); pre = max(0, pre + delta)
+                case "br": append("\n")
+                case "p": boundary(2)
+                case "div", "blockquote", "tr": boundary()
+                case "td", "th": if closing { append("\t") }
+                case "ol", "ul":
+                    boundary()
+                    if closing { if !lists.isEmpty { lists.removeLast() } }
+                    else { lists.append((name == "ol", 0)) }
+                case "li":
+                    boundary()
+                    if !closing {
+                        var marker = "• "
+                        if !lists.isEmpty {
+                            lists[lists.count - 1].count += 1
+                            if lists.last!.ordered { marker = String(lists.last!.count) + ". " }
+                        }
+                        append(String(repeating: "  ", count: max(0, lists.count - 1)) + marker)
+                    }
+                default: break
+                }
+            } else {
+                var text = decodeHTMLText(String(html[range]))
+                if pre == 0 {
+                    text = text.replacingOccurrences(of: #"[\t\r\n ]+"#, with: " ", options: .regularExpression)
+                    if output.length == 0 || output.string.last?.isWhitespace == true {
+                        if text.hasPrefix(" ") { text.removeFirst() }
+                    }
+                }
+                append(text)
+            }
+        }
+        return output
+    }
+    static func decodeHTMLText(_ text: String) -> String {
+        let named = ["&nbsp;": "\u{00a0}", "&bull;": "•", "&ndash;": "–", "&mdash;": "—", "&hellip;": "…", "&lsquo;": "‘", "&rsquo;": "’", "&ldquo;": "“", "&rdquo;": "”"]
+        let regex = try! NSRegularExpression(pattern: #"&(?:#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z]+);"#)
+        var output = text
+        for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
+            guard let source = Range(match.range, in: text), let destination = Range(match.range, in: output) else { continue }
+            let token = String(text[source])
+            output.replaceSubrange(destination, with: named[token] ?? TranslationRequest.decodeEntities(token))
+        }
+        return output
     }
     static func sanitizeHTML(_ html: String) -> String {
         let unsafe = #"(?is)<(script|style|iframe|object|svg|head)\b[^>]*>.*?</\1\s*>"#

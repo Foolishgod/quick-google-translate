@@ -39,6 +39,23 @@ shim.chmod(0o755)
 PY
     swiftc -swift-version 5 -O -module-cache-path "$MODULE/.build/module-cache" "${COMMON[@]}" "$MODULE/Tests/Browser/main.swift" "${FRAMEWORKS[@]}" -o "$MODULE/.build/source-browser-checks"
     "$MODULE/.build/source-browser-checks"
+    APP_EXECUTABLE="$MODULE/dist/划词谷歌翻译.app/Contents/MacOS/QuickGoogleTranslate"
+    if [[ -x "$APP_EXECUTABLE" ]]; then
+        python3 - <<'PY'
+from pathlib import Path
+import plistlib
+app = Path('QuickGoogleTranslate/.build/ForegroundFixture.app')
+(app / 'Contents/MacOS').mkdir(parents=True, exist_ok=True)
+(app / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier':'local.quickgoogletranslate.signing-test.foreground.fixture', 'CFBundleExecutable':'ForegroundFixture', 'CFBundleName':'ForegroundFixture', 'CFBundlePackageType':'APPL', 'CFBundleVersion':'1', 'CFBundleShortVersionString':'1.0'}))
+PY
+        swiftc -O -module-cache-path "$MODULE/.build/module-cache" "$MODULE/Tests/Foreground/main.swift" -framework AppKit -o "$MODULE/.build/ForegroundFixture.app/Contents/MacOS/ForegroundFixture"
+        python3 "$MODULE/Signing/sign-app.py" "$MODULE/.build/ForegroundFixture.app"
+        "$APP_EXECUTABLE" --verify-foreground "$PWD/$MODULE/.build/ForegroundFixture.app/Contents/MacOS/ForegroundFixture"
+        "$APP_EXECUTABLE" --verify-pinning
+        "$APP_EXECUTABLE" --verify-selection
+    else
+        print 'Build the application first to also run foreground popup checks.'
+    fi
 fi
 if [[ "${1:-}" == "--chrome" ]]; then
     command -v node >/dev/null 2>&1 || { print 'Chrome DOM checks require Node.js and npm ci.'; exit 1; }

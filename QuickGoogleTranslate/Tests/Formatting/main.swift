@@ -15,6 +15,12 @@ check(!sanitized.contains("example.invalid") && !sanitized.contains("<script") &
 let board = NSPasteboard(name: NSPasteboard.Name("qgt-format-fixture-" + UUID().uuidString))
 board.setData(Data(html.utf8), forType: .html)
 let rich = SelectionFormatting.fromClipboard(board)!
+check(rich.string.contains("• UGTA Debugger:") && rich.string.contains("• AI Cannon:"), "local HTML parser preserves visible list markers")
+let nested = SelectionFormatting.parseHTML("<ol><li>First<ul><li><strong>Nested</strong></li></ul></li><li>Second</li></ol>")
+check(nested.string.contains("1. First") && nested.string.contains("  • Nested") && nested.string.contains("2. Second"), "local parser retains ordered and nested lists")
+check(SelectionFormatting.decodeHTMLText("&amp;nbsp; &nbsp; &#x1F600;") == "&nbsp; \u{00a0} 😀", "decode HTML entities once without reinterpreting escaped literals")
+let malformed = SelectionFormatting.parseHTML("<div><ul><li><b>Unclosed <code>CANNON_RANGE")
+check(malformed.string.contains("• Unclosed CANNON_RANGE"), "malformed selection fragments cannot block or crash parsing")
 check(rich.string.contains("UGTA Debugger:") && rich.string.contains("AI Cannon:") && rich.string.contains("\n"), "HTML list selection retains item boundaries")
 let text = rich.string.trimmingCharacters(in: .whitespacesAndNewlines)
 let styled = SelectionFormatting.display(rich, text: text, size: 15)
