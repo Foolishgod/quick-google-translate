@@ -36,4 +36,8 @@ PY
     swiftc -swift-version 5 -O -module-cache-path "$MODULE/.build/module-cache" "${COMMON[@]}" "$MODULE/Tests/Browser/main.swift" "${FRAMEWORKS[@]}" -o "$MODULE/.build/source-browser-checks"
     "$MODULE/.build/source-browser-checks"
 fi
+if [[ "${1:-}" == "--chrome" ]]; then
+    command -v node >/dev/null 2>&1 || { print 'Chrome DOM checks require Node.js and npm ci.'; exit 1; }
+    node "$MODULE/Tests/Browser/dom-checks.cjs"
+fi
 print 'Source checks finished.'

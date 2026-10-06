@@ -32,7 +32,9 @@ final class CDPClient {
         if let sessionID { request["sessionId"] = sessionID }
         let data = try JSONSerialization.data(withJSONObject: request)
         guard let text = String(data: data, encoding: .utf8) else { throw TranslationError.message("后台浏览器请求无效。") }
-        return try await withCheckedThrowingContinuation { callback in
+        return try await withTaskCancellationHandler(operation: {
+          try Task.checkCancellation()
+          return try await withCheckedThrowingContinuation { callback in
             pending[id] = callback
             Task { @MainActor [weak self] in
                 do { try await socket.send(.string(text)) }
@@ -41,7 +43,12 @@ final class CDPClient {
             DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
                 self?.pending.removeValue(forKey: id)?.resume(throwing: TranslationError.message("后台浏览器未及时返回结果，请检查 Google 页面后重试。"))
             }
-        }
+          }
+        }, onCancel: { [weak self] in
+            // Receive the created target ID before canceling so it can be reused/closed.
+            guard method != "Target.createTarget" else { return }
+            Task { @MainActor in self?.pending.removeValue(forKey: id)?.resume(throwing: CancellationError()) }
+        })
     }
     func close() {
         receiver?.cancel(); receiver = nil
@@ -67,6 +74,9 @@ final class BackgroundBrowser {
     var request: Task<Void, Never>?
     var requestID = UUID()
     var targetID: String?
+    var pageSessionID: String?
+    var pageLanguages: String?
+    var cancellation: Task<Void, Never>?
     var statusText: String {
         guard process?.isRunning == true else { return "浏览器尚未运行" }
         return mode == .login ? "登录窗口已打开 · 完成后转入后台" : "浏览器已在后台运行"
@@ -91,6 +101,7 @@ final class BackgroundBrowser {
     }
     @MainActor func stop(cancelRequest: Bool = true) async throws {
         if cancelRequest { cancelTranslation() }
+        targetID = nil; pageSessionID = nil; pageLanguages = nil
         client?.close(); client = nil
         if let process, process.isRunning {
             process.terminate()
@@ -145,18 +156,27 @@ final class BackgroundBrowser {
     }
     func cancelTranslation() {
         requestID = UUID()
-        request?.cancel(); request = nil
-        if let targetID, let client {
-            Task { @MainActor in _ = try? await client.call("Target.closeTarget", params: ["targetId": targetID], timeout: 3) }
+        request?.cancel()
+        if let sessionID = pageSessionID, let client {
+            let previous = cancellation
+            cancellation = Task { @MainActor in
+                await previous?.value
+                _ = try? await client.call("Runtime.evaluate", params: ["expression": "window.__qgtRequest = null"], sessionID: sessionID, timeout: 3)
+            }
         }
-        targetID = nil
     }
     func translate(text: String, source: String, target: String, completion: @escaping (Result<String, Error>) -> Void) {
+        let previous = request
         cancelTranslation()
         let token = requestID
+        let cancelPage = cancellation
         request = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
+                // Serialize page changes, including a canceled navigation and JS cleanup.
+                await previous?.value
+                await cancelPage?.value
+                try Task.checkCancellation()
                 if source == target { throw TranslationError.message("原文语言和目标语言相同，请修改设置。") }
                 if self.mode == .login, self.process?.isRunning == true { throw TranslationError.message("请先完成专用窗口中的登录，再在设置中点击“转入后台”。") }
                 try await self.startBackground()
@@ -164,26 +184,22 @@ final class BackgroundBrowser {
                 guard !Task.isCancelled else { return }
                 self.requestID = token
                 guard let client = self.client else { throw TranslationError.message("后台浏览器未连接。") }
-                let result = try await client.call("Target.createTarget", params: ["url": "about:blank"])
-                guard let targetID = result["targetId"] as? String else { throw TranslationError.message("无法创建后台翻译页面。") }
-                guard self.requestID == token, !Task.isCancelled else {
-                    _ = try? await client.call("Target.closeTarget", params: ["targetId": targetID], timeout: 3)
-                    return
-                }
-                self.targetID = targetID
-                let attached = try await client.call("Target.attachToTarget", params: ["targetId": targetID, "flatten": true])
-                try Task.checkCancellation()
-                guard let sessionID = attached["sessionId"] as? String else { throw TranslationError.message("无法连接后台翻译页面。") }
-                var components = URLComponents(url: TranslationRequest.pageURL(text: text, target: target), resolvingAgainstBaseURL: false)!
-                components.queryItems = components.queryItems!.map { $0.name == "sl" ? URLQueryItem(name: "sl", value: source) : $0 }
-                let initialLoader = try await self.loaderID(client, sessionID: sessionID)
-                _ = try await client.call("Page.navigate", params: ["url": components.url!.absoluteString], sessionID: sessionID)
-                try await self.waitForNavigation(client, sessionID: sessionID, previous: initialLoader)
                 let scriptURL = Bundle.main.resourceURL!.appendingPathComponent("BrowserTranslate.js")
                 let script = try String(contentsOf: scriptURL, encoding: .utf8)
                 var value: [String: Any]?
                 for attempt in 0..<2 {
-                    let evaluated = try await client.call("Runtime.evaluate", params: ["expression": script, "awaitPromise": true, "returnByValue": true], sessionID: sessionID, timeout: 55)
+                    let sessionID = try await self.preparePage(client, source: source, target: target)
+                    let input = try JSONSerialization.data(withJSONObject: ["id": token.uuidString, "text": text, "source": source, "target": target])
+                    let expression = "(" + script + ")(" + String(decoding: input, as: UTF8.self) + ")"
+                    let evaluated: [String: Any]
+                    do {
+                        evaluated = try await client.call("Runtime.evaluate", params: ["expression": expression, "awaitPromise": true, "returnByValue": true], sessionID: sessionID, timeout: 50)
+                    } catch {
+                        try Task.checkCancellation()
+                        guard attempt == 0 else { throw error }
+                        try await self.discardPage(client)
+                        continue
+                    }
                     guard self.requestID == token, !Task.isCancelled else { return }
                     let remote = evaluated["result"] as? [String: Any]
                     value = remote?["value"] as? [String: Any]
@@ -192,6 +208,9 @@ final class BackgroundBrowser {
                         let previous = try await self.loaderID(client, sessionID: sessionID)
                         _ = try await client.call("Page.reload", sessionID: sessionID)
                         try await self.waitForNavigation(client, sessionID: sessionID, previous: previous)
+                    } else if value?["recover"] as? Bool == true || evaluated["exceptionDetails"] != nil || value == nil {
+                        guard attempt == 0 else { throw TranslationError.message("Google 页面未能准备好新翻译，请打开登录窗口检查后重试。") }
+                        try await self.discardPage(client)
                     } else { break }
                 }
                 if let message = value?["error"] as? String { throw TranslationError.message(message) }
@@ -200,8 +219,39 @@ final class BackgroundBrowser {
             } catch {
                 if self.requestID == token, !Task.isCancelled { completion(.failure(error)) }
             }
-            if self.requestID == token { self.cancelTranslation() }
+            // Keep the page and its selected model warm for the next translation.
         }
+    }
+    @MainActor func discardPage(_ client: CDPClient) async throws {
+        let oldTarget = targetID
+        targetID = nil; pageSessionID = nil; pageLanguages = nil
+        if let oldTarget { _ = try? await client.call("Target.closeTarget", params: ["targetId": oldTarget], timeout: 3) }
+        try Task.checkCancellation()
+    }
+    @MainActor func preparePage(_ client: CDPClient, source: String, target: String) async throws -> String {
+        if pageSessionID == nil {
+            try await discardPage(client)
+            let result = try await client.call("Target.createTarget", params: ["url": "about:blank"])
+            guard let created = result["targetId"] as? String else { throw TranslationError.message("无法创建后台翻译页面。") }
+            targetID = created
+            try Task.checkCancellation()
+            let attached = try await client.call("Target.attachToTarget", params: ["targetId": created, "flatten": true])
+            guard let session = attached["sessionId"] as? String else { throw TranslationError.message("无法连接后台翻译页面。") }
+            pageSessionID = session
+        }
+        guard let sessionID = pageSessionID else { throw TranslationError.message("后台页面未连接。") }
+        let languages = source + "→" + target
+        if pageLanguages != languages {
+            // Start with no text: select Advanced before submitting any translation.
+            var components = URLComponents(url: TranslationRequest.pageURL(text: "", target: target), resolvingAgainstBaseURL: false)!
+            components.queryItems = components.queryItems!.map { $0.name == "sl" ? URLQueryItem(name: "sl", value: source) : $0 }
+            let previous = try await loaderID(client, sessionID: sessionID)
+            _ = try await client.call("Page.navigate", params: ["url": components.url!.absoluteString], sessionID: sessionID)
+            try await waitForNavigation(client, sessionID: sessionID, previous: previous)
+            try Task.checkCancellation()
+            pageLanguages = languages
+        }
+        return sessionID
     }
     @MainActor func loaderID(_ client: CDPClient, sessionID: String) async throws -> String {
         let tree = try await client.call("Page.getFrameTree", sessionID: sessionID)

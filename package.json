@@ -1,6 +1,6 @@
 {
   "name": "quick-google-translate-dev",
-  "version": "1.5.2",
+  "version": "1.5.4",
   "private": true,
   "description": "Development-only page and browser fixtures for QuickGoogleTranslate",
   "scripts": {

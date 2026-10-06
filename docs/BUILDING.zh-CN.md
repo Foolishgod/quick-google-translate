@@ -42,11 +42,19 @@ zsh scripts/checks.sh --native
 
 模拟检查通过不代表真实 Chrome 登录、高级翻译和辅助功能授权在所有 Mac 上均已验证。这些行为仍需实际应用测试。
 
+已安装 Google Chrome 时，还可运行真实浏览器的本地页面检查：
+
+```sh
+zsh scripts/checks.sh --chrome
+```
+
+使用独立临时浏览器资料，所有页面请求由本地测试内容拦截，不登录 Google 或使用日常 Chrome 资料。验证输入事件、模型切换、多行文字、连续翻译无额外加载以及取消旧脚本。
+
 ## 发布与更新
 
 个人构建不需要运行 `release.sh` 或 `publish.py`。这两个脚本供原仓库维护者使用，需要钥匙串中的更新签名身份，以及有权访问对应 GitHub 仓库的 `gh` 登录。
 
-发布新应用时必须递增 `CFBundleVersion` 与版本号，保留历史发布归档，验证完整包和增量包，再发布签名更新源。已发布的同版本资产不能被覆盖。发布应用更新默认不会重写仓库首页 README，避免覆盖网页上的学习修改。需要同步首页时才显式传入 `--sync-readme`。
+发布新应用时必须递增 `CFBundleVersion` 与版本号，保留历史发布归档，验证完整包和增量包，再发布签名更新源。已发布的同版本资产不能被覆盖。发布应用更新默认不会重写仓库首页 README，需要同步首页时显式传入 `--sync-readme`。应用源码同步另行提交，不包含构建产物和个人签名资料。
 
 ## 目录对应什么
 
@@ -56,5 +64,5 @@ zsh scripts/checks.sh --native
 - `QuickGoogleTranslate/Signing`：个人签名工具源码；个人证书配置被忽略。
 - `QuickGoogleTranslate/ChromeExtension`：旧版扩展参考与测试；当前应用不需要安装它。
 - `QuickGoogleTranslateUninstaller`：内置卸载工具的源码与测试。
-- `docs`：GitHub 入门、构建和学习笔记。
+- `docs`：源码构建与验证说明。
 - `licenses`：第三方 Sparkle 许可说明。

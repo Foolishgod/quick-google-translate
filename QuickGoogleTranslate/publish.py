@@ -33,7 +33,7 @@ def put_file(path,content,message):
         request.write_text(json.dumps(body))
         call('api','--method','PUT',f'repos/{repo}/contents/{path}','--input',str(request))
 
-# Keep web-edited learning documentation unless the maintainer explicitly syncs it.
+# Keep web-edited application documentation unless explicitly synchronized.
 if '--sync-readme' in sys.argv[2:]:
     put_file('README.md',(root/'Publication/README.md').read_bytes(),'Synchronize application and source documentation')
 existing=subprocess.run([gh,'api',f'repos/{repo}/releases/tags/updates'],capture_output=True,text=True)

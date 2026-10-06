@@ -57,10 +57,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var shortcutStatus: NSTextField?
     var shortcut = Shortcut.saved
     var busy = false
+    var selectionRevision = 0
+    var readSelectionAgain = false
+    // Controlled adapters are used only by the read-only native verification modes.
+    var selectionReaderForVerification: ((@escaping (String?) -> Void) -> Void)?
+    var translatorForVerification: ((String, String, @escaping (Result<String, Error>) -> Void) -> Void)?
     var generation = 0
     let languages = [("简体中文", "zh-CN"), ("繁體中文", "zh-TW"), ("English", "en"), ("日本語", "ja"), ("한국어", "ko"), ("Français", "fr"), ("Deutsch", "de"), ("Español", "es")]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if CommandLine.arguments.contains("--verify-selection") {
+            verifySelectionHotkey()
+            NSApp.terminate(nil)
+            return
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--preview-shortcuts"), CommandLine.arguments.count > index + 1 {
             showSettings()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -118,8 +128,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let index = CommandLine.arguments.firstIndex(of: "--preview"), CommandLine.arguments.count > index + 1 {
             createPanel()
             sourceView.string = "Select any word or sentence, then press your shortcut."
+            sourceText = sourceView.string
             resultView.string = "选中任意单词或句子，然后按下快捷键。"
-            message.stringValue = shortcut.label + " 关闭 · Esc"
+            message.stringValue = "新选区翻译 · 同文关闭 · Esc"
             copyButton.isEnabled = true
             panel.appearance = NSAppearance(named: .aqua)
             panel.center()
@@ -134,13 +145,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     precondition(effect.material == .popover && effect.blendingMode == .behindWindow, "Use native backdrop blur")
                     precondition(!self.panel.isOpaque && self.panel.backgroundColor == .clear, "Keep the window background transparent")
                     precondition(root.subviews.allSatisfy { !$0.hasAmbiguousLayout }, "Window layout must be unambiguous")
-                    self.busy = true
+                    self.selectionReaderForVerification = { complete in complete(self.sourceText) }
                     let previousGeneration = self.generation
                     let serviceToken = self.translationService.token
                     self.handleShortcut()
-                    precondition(!self.panel.isVisible, "Hotkey must dismiss even while busy")
+                    precondition(!self.panel.isVisible, "Same selection must dismiss")
                     precondition(self.generation > previousGeneration && self.translationService.token != serviceToken, "Dismiss must invalidate pending results")
-                    self.busy = false
                     self.panel.orderFrontRegardless()
                     self.panel.cancelOperation(nil)
                     precondition(!self.panel.isVisible, "Escape must dismiss")
@@ -150,7 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     self.panel.orderFrontRegardless()
                     self.handleShortcut()
                     precondition(!self.panel.isVisible, "Repeated show/hide must work")
-                    print("PASS: native blur, layout, hotkey dismissal while busy, request cancellation, Escape, window close, repeated dismissal")
+                    print("PASS: native blur, layout, same-selection dismissal, request cancellation, Escape, window close, repeated dismissal")
                     self.panel.orderFrontRegardless()
                 }
                 let frames = root.subviews.map { "\(type(of: $0)) \($0.frame) ambiguous=\($0.hasAmbiguousLayout)" }.joined(separator: "\n")
@@ -263,7 +273,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         sourceView = original
         let (resultScroll, result) = textArea(font: .systemFont(ofSize: 19))
         resultView = result
-        message = NSTextField(labelWithString: "再按快捷键关闭")
+        message = NSTextField(labelWithString: "新选区翻译 · 同文关闭 · Esc")
         message.font = .systemFont(ofSize: 11)
         message.textColor = .secondaryLabelColor
         message.lineBreakMode = .byTruncatingTail
@@ -323,9 +333,115 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     func handleShortcut() {
         guard recorder?.recording != true else { return }
-        // Dismiss before checking permissions or busy state, including during a request.
-        if panel.isVisible { closePanel(); return }
+        selectionRevision += 1
+        // Serialize reads so a second copy chord cannot overwrite another read's clipboard snapshot.
+        // Only the most recent shortcut request may update or dismiss the window.
+        if busy { readSelectionAgain = true; return }
         translateSelection()
+    }
+    func verifySelectionHotkey() {
+        createPanel()
+        var reads: [(String?) -> Void] = []
+        var requests: [(String, (Result<String, Error>) -> Void)] = []
+        selectionReaderForVerification = { reads.append($0) }
+        translatorForVerification = { text, _, complete in requests.append((text, complete)) }
+        func read(_ text: String?) { let complete = reads.removeFirst(); complete(text) }
+        func check(_ value: Bool, _ description: String) {
+            precondition(value, description)
+            print("PASS: \(description)")
+        }
+        handleShortcut()
+        check(busy && reads.count == 1 && !panel.isVisible, "Hidden panel starts a selection read")
+        read("  First selection\n")
+        check(panel.isVisible && sourceText == "First selection" && requests.count == 1, "First selection opens a translation")
+        let firstGeneration = generation
+        handleShortcut(); read("Second selection")
+        check(panel.isVisible && sourceText == "Second selection" && requests.count == 2 && generation > firstGeneration, "New selection replaces the pending translation without hiding")
+        requests[0].1(.success("Late first result"))
+        check(resultView.string == "正在翻译…", "Old translation completion cannot overwrite new selection")
+        requests[1].1(.success("Second result"))
+        check(resultView.string == "Second result" && copyButton.isEnabled, "Latest translation result is displayed")
+        handleShortcut(); read("First selection")
+        check(panel.isVisible && sourceText == "First selection" && requests.count == 3, "Previously translated text is translated again when current source differs")
+        let token = translationService.token
+        handleShortcut(); read("\n First selection \t")
+        check(!panel.isVisible && requests.count == 3 && translationService.token != token, "Same selection closes while translating and cancels pending results")
+        requests[2].1(.success("Late result after close"))
+        check(!panel.isVisible && resultView.string == "正在翻译…", "Late result cannot reopen the closed panel")
+        handleShortcut(); read("First selection")
+        check(panel.isVisible && requests.count == 4, "Hidden panel translates the same text again")
+        requests[3].1(.success("Keep this result"))
+        for missing in [nil, "", " \n\t"] as [String?] {
+            handleShortcut(); read(missing)
+            check(panel.isVisible && resultView.string == "Keep this result" && requests.count == 4, "Unreadable or empty selection preserves the current translation")
+        }
+        handleShortcut(); read(String(repeating: "中", count: 5001))
+        check(panel.isVisible && resultView.string == "Keep this result" && requests.count == 4, "Oversized selection preserves current translation")
+        handleShortcut()
+        handleShortcut()
+        handleShortcut()
+        check(reads.count == 1 && readSelectionAgain, "Rapid shortcuts serialize selection reads")
+        read("Stale selection")
+        check(reads.count == 1 && requests.count == 4 && sourceText == "First selection", "Obsolete read is discarded and newest read is started")
+        read("Latest selection")
+        check(panel.isVisible && sourceText == "Latest selection" && requests.count == 5 && !busy, "Only the latest selection request updates the panel")
+        handleShortcut()
+        panel.cancelOperation(nil)
+        read("Selection arriving after Escape")
+        check(!panel.isVisible && requests.count == 5 && !busy, "Escape invalidates an in-flight selection read")
+        handleShortcut()
+        handleShortcut()
+        closePanel()
+        read("Cancelled queued selection")
+        check(reads.isEmpty && !readSelectionAgain && !busy && !panel.isVisible, "Closing clears queued reads and prevents reopening")
+        handleShortcut()
+        closePanel()
+        handleShortcut()
+        read("Obsolete read from before close")
+        check(!panel.isVisible && reads.count == 1 && requests.count == 5, "A fresh shortcut after close waits for old read cleanup")
+        read("Reopened selection")
+        check(panel.isVisible && sourceText == "Reopened selection" && requests.count == 6, "Fresh shortcut after close opens only the newly selected text")
+        closePanel()
+        handleShortcut(); read("Last selection")
+        let record = Recorder()
+        recorder = record; record.recording = true
+        handleShortcut()
+        check(reads.isEmpty && panel.isVisible, "Shortcut recording does not trigger translation or dismissal")
+        record.recording = false
+        handleShortcut()
+        startRecording()
+        read("Obsolete read while editing shortcut")
+        check(panel.isVisible && sourceText == "Last selection" && !busy, "Starting shortcut recording cancels an in-flight selection read")
+        record.recording = false
+        panel.performClose(nil)
+        check(!panel.isVisible, "Window close still dismisses")
+        check(!busy && reads.isEmpty, "Selection reader returns to idle")
+        print("All selection-aware shortcut checks passed; no network, clipboard or permissions changed.")
+    }
+    func consumeSelection(_ raw: String) {
+        let text: String
+        do { text = try TranslationRequest.normalize(raw) }
+        catch { selectionFailed(error.localizedDescription); return }
+        if panel.isVisible && text == sourceText { closePanel() }
+        else { showTranslation(text) }
+    }
+    func selectionFailed(_ text: String) {
+        if panel.isVisible {
+            // Failure to read a selection is not evidence that it matches the current source.
+            message.stringValue = "未读到有效新选区 · Esc 关闭"
+            message.toolTip = text
+        } else { showMessage(text) }
+    }
+    func finishSelectionRead() {
+        busy = false
+        if readSelectionAgain {
+            readSelectionAgain = false
+            translateSelection()
+        }
+    }
+    func invalidateSelectionReads() {
+        selectionRevision += 1
+        readSelectionAgain = false
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if sender === panel { closePanel(); return false }
@@ -359,13 +475,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     func translateSelection() {
         guard !busy, recorder?.recording != true else { return }
+        let revision = selectionRevision
+        if let reader = selectionReaderForVerification {
+            busy = true
+            reader { [weak self] text in
+                guard let self else { return }
+                defer { self.finishSelectionRead() }
+                guard self.selectionRevision == revision else { return }
+                if let text { self.consumeSelection(text) }
+                else { self.selectionFailed("没有读到选区。请选择文字后重试。") }
+            }
+            return
+        }
         guard AccessibilityPermission.check() else {
-            showMessage("本次运行尚未获得读取权限。若开关已打开，请退出本应用，移除旧的权限条目，用 + 添加新版后再打开。设置页可查看当前运行位置。")
+            selectionFailed("本次运行尚未获得读取权限。若开关已打开，请退出本应用，移除旧的权限条目，用 + 添加新版后再打开。设置页可查看当前运行位置。")
             openAccessibility()
             return
         }
         guard let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
-            showMessage("请回到 Chrome 或其他软件，选中文字后再按快捷键。")
+            selectionFailed("请回到 Chrome 或其他软件，选中文字后再按快捷键。")
             return
         }
         let pid = front.processIdentifier
@@ -373,7 +501,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         AXUIElementSetMessagingTimeout(application, 0.25)
         busy = true
         Task { @MainActor in
-            defer { self.busy = false }
+            defer { self.finishSelectionRead() }
+            guard self.selectionRevision == revision else { return }
             let isChromium = ["com.google.Chrome", "com.microsoft.edgemac", "com.brave.Browser", "org.chromium.Chromium", "company.thebrowser.Browser"].contains { (front.bundleIdentifier ?? "").hasPrefix($0) }
             if isChromium {
                 AXUIElementSetAttributeValue(application, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
@@ -383,17 +512,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             for attempt in 0..<(isChromium ? 3 : 1) {
                 if attempt > 0 { try? await Task.sleep(nanoseconds: 150_000_000) }
-                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
-                if let text = self.selectedText(in: application) { self.showTranslation(text); return }
+                guard self.selectionRevision == revision else { return }
+                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+                    self.selectionFailed("请回到选中文字的软件后重试。"); return
+                }
+                if let text = self.selectedText(in: application) { self.consumeSelection(text); return }
             }
             var attempts = 0
             while !NSEvent.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty && attempts < 120 {
                 try? await Task.sleep(nanoseconds: 25_000_000)
+                guard self.selectionRevision == revision else { return }
                 attempts += 1
             }
-            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
+            guard self.selectionRevision == revision else { return }
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+                self.selectionFailed("请回到选中文字的软件后重试。"); return
+            }
             guard NSEvent.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty else {
-                self.showMessage("请松开快捷键后重试。"); return
+                self.selectionFailed("请松开快捷键后重试。"); return
             }
             let clipboard = NSPasteboard.general
             let snapshot: [[NSPasteboard.PasteboardType: Data]] = (clipboard.pasteboardItems ?? []).map { item in
@@ -407,7 +543,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                   let down = CGEvent(keyboardEventSource: source, virtualKey: 8, keyDown: true),
                   let up = CGEvent(keyboardEventSource: source, virtualKey: 8, keyDown: false),
                   let commandUp = CGEvent(keyboardEventSource: source, virtualKey: 55, keyDown: false) else {
-                self.showMessage("无法读取选区，请复制文字后从菜单翻译剪贴板。"); return
+                self.selectionFailed("无法读取选区，请复制文字后从菜单翻译剪贴板。"); return
             }
             // Post the full copy chord to the captured app, with no inherited hotkey flags.
             commandDown.flags = .maskCommand; down.flags = .maskCommand; up.flags = .maskCommand; commandUp.flags = []
@@ -437,8 +573,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 }
                 if !items.isEmpty { clipboard.writeObjects(items) }
             }
-            if let copied { self.showTranslation(copied) }
-            else { self.showMessage("没有读到选区。请确认辅助功能权限已开启，也可先按 ⌘C，再从菜单选择“翻译剪贴板”。") }
+            // Always release the copy chord and restore its clipboard before retiring a stale read.
+            guard self.selectionRevision == revision else { return }
+            if let copied { self.consumeSelection(copied) }
+            else { self.selectionFailed("没有读到选区。请确认辅助功能权限已开启，也可先按 ⌘C，再从菜单选择“翻译剪贴板”。") }
         }
     }
 
@@ -464,6 +602,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         resultView.string = text
         resultView.textColor = .labelColor
         message.stringValue = "选中文字后按 " + shortcut.label
+        message.toolTip = nil
         copyButton.isEnabled = false
         retryButton.isHidden = true
         presentPanel()
@@ -478,6 +617,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let sourceName = chrome ? (languages.first(where: { $0.1 == source })?.0 ?? source) : "自动识别"
         languageLabel.stringValue = sourceName + " → " + (languages.first(where: { $0.1 == target })?.0 ?? target)
         sourceText = text; translatedText = ""
+        message.toolTip = nil
         sourceView.string = text
         sourceView.scrollRangeToVisible(NSRange(location: 0, length: 0))
         resultView.string = "正在翻译…"
@@ -489,7 +629,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         generation += 1
         let requestGeneration = generation
         presentPanel()
-        translationService.translate(text: text, target: target) { [weak self] result in
+        let completion: (Result<String, Error>) -> Void = { [weak self] result in
             guard let self, self.generation == requestGeneration else { return }
             self.spinner.stopAnimation(nil)
             self.resultView.textColor = .labelColor
@@ -499,23 +639,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self.resultView.string = translated
                 self.resultView.scrollRangeToVisible(NSRange(location: 0, length: 0))
                 self.copyButton.isEnabled = true
-                self.message.stringValue = chrome ? "网页高级（Gemini） · 再按快捷键关闭" : self.shortcut.label + " 关闭 · Esc"
+                self.message.stringValue = "新选区翻译 · 同文关闭 · Esc"
             case .failure(let error):
                 self.resultView.string = error.localizedDescription
                 self.retryButton.isHidden = false
                 self.message.stringValue = "连接失败"
             }
         }
+        if let translator = translatorForVerification {
+            translationService.cancel()
+            translator(text, target, completion)
+        } else { translationService.translate(text: text, target: target, completion: completion) }
     }
-    @objc func retryTranslation() { if !sourceText.isEmpty { showTranslation(sourceText) } }
+    @objc func retryTranslation() {
+        if !sourceText.isEmpty { invalidateSelectionReads(); showTranslation(sourceText) }
+    }
     @objc func copyTranslation() {
         guard !translatedText.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(translatedText, forType: .string)
         message.stringValue = "译文已复制"
     }
-    @objc func translateClipboard() { showTranslation(NSPasteboard.general.string(forType: .string) ?? "") }
+    @objc func translateClipboard() {
+        invalidateSelectionReads()
+        showTranslation(NSPasteboard.general.string(forType: .string) ?? "")
+    }
     @objc func closePanel() {
+        invalidateSelectionReads()
         generation += 1
         translationService.cancel()
         spinner.stopAnimation(nil)
@@ -533,7 +683,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         let title = NSTextField(labelWithString: "选中文字，一键翻译")
         title.font = .boldSystemFont(ofSize: 19)
-        let intro = NSTextField(wrappingLabelWithString: "按一次翻译，再按一次关闭。磨砂半透明浮窗显示原文和译文，默认免密钥。")
+        let intro = NSTextField(wrappingLabelWithString: "选新文字直接翻译，同文再按关闭。磨砂半透明浮窗显示原文和译文，默认免密钥。")
         intro.preferredMaxLayoutWidth = 452
         let shortcutTitle = NSTextField(labelWithString: "全局快捷键（点击后按下新组合）")
         let record = Recorder(title: shortcut.label, target: self, action: #selector(startRecording))
@@ -653,6 +803,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     @objc func startRecording() {
         if recorder?.recording == true { recorder?.cancel?(); return }
+        invalidateSelectionReads()
         hotKey.unregister()
         recorder?.recording = true
         recorder?.title = "请按快捷键 · Esc 取消"
@@ -664,7 +815,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             shortcut = candidate
             candidate.save()
             recorder?.title = candidate.label
-            shortcutStatus?.stringValue = "已设置为 \(candidate.label)。按一次翻译，再按一次关闭浮窗。"
+            shortcutStatus?.stringValue = "已设置为 \(candidate.label)。选新文字直接翻译，同文再按关闭。"
         } else {
             let failure = hotKey.lastFailure?.message ?? "快捷键无法注册。"
             let restored = hotKey.register(shortcut)
