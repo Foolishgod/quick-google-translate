@@ -4,6 +4,18 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>划词谷歌翻译</title>
         <item>
+            <title>1.5.1</title>
+            <pubDate>Tue, 06 Oct 2026 13:32:59 +0800</pubDate>
+            <link>https://github.com/Foolishgod/quick-google-translate</link>
+            <sparkle:version>8</sparkle:version>
+            <sparkle:shortVersionString>1.5.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-1.5.1.zip" length="1330509" type="application/octet-stream" sparkle:edSignature="YHx5RiaBLcvV30egO2n0h4R3Vt6adqxIuw6Ohvg3CuNSCeLshG9idTpShCWO0wo82POcLe7xCx5eaEiRbLGMCQ=="></enclosure>
+            <sparkle:deltas>
+                <enclosure url="https://github.com/Foolishgod/quick-google-translate/releases/download/updates/QuickGoogleTranslate-8-7.delta" length="55166" type="application/octet-stream" sparkle:deltaFrom="7" sparkle:edSignature="UL6PFafO5Xt7Xjvpple14uow7Z4wyUvmHbMDG8QN6tM4nQ7y80eLaFKy8sR+8VRLWCvjdmItC0bFRgTNjSBHBw=="></enclosure></sparkle:deltas>
+        </item>
+        <item>
             <title>1.5.0</title>
             <pubDate>Tue, 06 Oct 2026 13:00:17 +0800</pubDate>
             <link>https://github.com/Foolishgod/quick-google-translate</link>
@@ -15,6 +27,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         </item>
     </channel>
 </rss><!-- sparkle-signatures:
-edSignature: aF05yZ9ocCfp32PQXSx29UlJ0feFK3uY/yb7EV4mkrO4Ol/hRWx2GqzJclUnyCYgXMDHm4mOuZ9AAghIX4cUAg==
-length: 1254
+edSignature: hko1BtQnZJtoTfBnCsI12G9psN4SxROdUfyc+zbe/4h1N/DWtZG2FaUXK2laXGbzgGk0CTGBw0hlRvHtxIOKDw==
+length: 2434
 -->
