@@ -1,0 +1,12 @@
+{
+  "name": "quick-google-translate-dev",
+  "version": "1.5.2",
+  "private": true,
+  "description": "Development-only page and browser fixtures for QuickGoogleTranslate",
+  "scripts": {
+    "test": "node QuickGoogleTranslate/Tests/browser-page-checks.cjs && node QuickGoogleTranslate/Tests/chrome-extension-checks.cjs"
+  },
+  "devDependencies": {
+    "ws": "8.22.0"
+  }
+}

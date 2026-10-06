@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "划词翻译 · Chrome 高级连接",
+  "version": "1.3.0",
+  "description": "将 Google 翻译网页的高级模型结果送回 Mac 划词翻译浮窗。账号登录保持在 Chrome。",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:48137/*",
+    "https://translate.google.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "连接 Mac 划词翻译"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://translate.google.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

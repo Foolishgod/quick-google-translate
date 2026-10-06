@@ -1,0 +1,27 @@
+# Local build output and downloaded dependencies
+.build/
+dist/
+Vendor/
+node_modules/
+.DS_Store
+Preview*.png
+*.layout.txt
+*.zip
+*.delta
+*.tar.xz
+
+# Personal signing configuration is created separately on each build Mac
+**/Signing/identity.json
+**/Signing/certificate.der
+
+# Credentials and private key material
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.pem
+*.key
+*.keychain
+*.keychain-db
+BrowserProfile/
