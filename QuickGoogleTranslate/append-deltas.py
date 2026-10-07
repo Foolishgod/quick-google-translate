@@ -2,6 +2,8 @@
 from pathlib import Path
 import plistlib
 import subprocess
+import sys
+from release_feed import preserve_history
 import tempfile
 import xml.etree.ElementTree as ET
 
@@ -16,6 +18,8 @@ build = info['CFBundleVersion']
 app = ROOT/'dist/划词谷歌翻译.app'
 feed = FOLDER/'appcast.xml'
 tree = ET.parse(feed)
+if len(sys.argv) > 1:
+    preserve_history(tree, sys.argv[1], build)
 item = next(item for item in tree.findall('./channel/item') if item.findtext(f'{{{NS}}}version') == build)
 archive = FOLDER / f"QuickGoogleTranslate-{info['CFBundleShortVersionString']}.zip"
 for old_archive in sorted(FOLDER.glob('QuickGoogleTranslate-*.zip')):
@@ -48,7 +52,7 @@ for old_archive in sorted(FOLDER.glob('QuickGoogleTranslate-*.zip')):
         for previous in list(deltas):
             if previous.get(f'{{{NS}}}deltaFrom') == old_build:
                 deltas.remove(previous)
-        ET.SubElement(deltas,'enclosure',{'url':'https://github.com/Foolishgod/quick-google-translate/releases/download/updates/'+delta.name,
+        ET.SubElement(deltas,'enclosure',{'url':f"https://github.com/Foolishgod/quick-google-translate/releases/download/v{info['CFBundleShortVersionString']}/{delta.name}",
             'length':str(delta.stat().st_size),'type':'application/octet-stream',f'{{{NS}}}deltaFrom':old_build,f'{{{NS}}}edSignature':signature})
         print(f'Verified signed delta {old_build} → {build}: {delta.stat().st_size} bytes')
 tree.write(feed,encoding='utf-8',xml_declaration=True)

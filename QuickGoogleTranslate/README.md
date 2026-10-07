@@ -56,7 +56,7 @@ macOS 通常将 Command + 空格分配给 Spotlight、Control + 空格分配给�
 
 菜单栏新增“检查更新…”，设置新增“软件更新与卸载…”。使用 Sparkle 2.10.0，开启自动检查时通常每日检查一次，有新版本后由你确认安装。优先使用已发布且适配当前版本的差分包；版本不匹配或差分失败时改用完整包，仍由应用完成更新和重启，无需手动拖动替换。更新保留快捷键、语言、API 配置及专用浏览器的 Google 登录资料。
 
-1.4 及更早版本未内置更新组件，需要手动安装一次 1.5。此后才能通过应用内更新。发布时必须递增 CFBundleVersion，保留旧发布归档，并运行 build.sh、release.sh；签署更新后发布 GitHub Releases 资产及 main 分支的 appcast.xml。在线更新源为 https://raw.githubusercontent.com/Foolishgod/quick-google-translate/main/appcast.xml，下载资产位于该仓库的 updates 发布。GitHub 网络不可用时会报连接错误，不影响已安装版本。
+1.4 及更早版本未内置更新组件，需要手动安装一次 1.5。此后才能通过应用内更新。发布时必须递增 CFBundleVersion，保留旧发布归档，并运行 build.sh、release.sh；签署更新后发布 GitHub Releases 资产及 main 分支的 appcast.xml。在线更新源为 https://raw.githubusercontent.com/Foolishgod/quick-google-translate/main/appcast.xml，每个新版本以 `v版本号` 创建独立 Release，下载资产位于对应版本的发布页；旧 `updates` 发布保留供历史版本下载。GitHub 网络不可用时会报连接错误，不影响已安装版本。
 
 应用启用更新源与更新包的 Ed25519 签名校验，安装前校验更新包。私钥仅存于本机钥匙串，不进入应用或公开仓库。1.5.2 起使用固定个人签名，以保持更新前后应用身份一致；公开正式分发应使用 Developer ID 签名和公证。只读位置或系统写入权限限制可能阻止更新，更新组件会处理或报错。
 

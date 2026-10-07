@@ -2,6 +2,7 @@
 set -eu
 cd "${0:A:h:h}"
 MODULE="QuickGoogleTranslate"
+python3 "$MODULE/Tests/Publication/test-publish.py"
 mkdir -p "$MODULE/.build/module-cache" QuickGoogleTranslateUninstaller/.build/module-cache
 COMMON=("$MODULE/Sources/TranslationLayout.swift" "$MODULE/Sources/TranslationService.swift" "$MODULE/Sources/ChromeBridge.swift" "$MODULE/Sources/BackgroundBrowser.swift")
 FRAMEWORKS=(-framework AppKit -framework WebKit -framework ApplicationServices -framework Security -framework Network)
