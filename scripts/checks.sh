@@ -57,6 +57,7 @@ PY
         "$APP_EXECUTABLE" --verify-pinning
         "$APP_EXECUTABLE" --verify-selection
         "$APP_EXECUTABLE" --verify-input
+        "$APP_EXECUTABLE" --verify-auto-input
     else
         print 'Build the application first to also run foreground popup checks.'
     fi

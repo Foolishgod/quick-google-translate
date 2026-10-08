@@ -33,6 +33,18 @@ check((translated.attribute(.font, at: token.location, effectiveRange: nil) as! 
 let style = translated.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as! NSParagraphStyle
 check(style.headIndent > style.firstLineHeadIndent, "wrapped list items align below their text")
 board.releaseGlobally()
+for heading in ["常见释义", "Word meanings"] {
+    let word = "银行\n\n" + heading + "\n名词 · 银行；岸边\n动词 · 存款"
+    let dictionary = SelectionFormatting.translationResult(word)
+    let primary = dictionary.attribute(.font, at: 0, effectiveRange: nil) as! NSFont
+    let entryRange = (word as NSString).range(of: "名词")
+    let entryFont = dictionary.attribute(.font, at: entryRange.location, effectiveRange: nil) as! NSFont
+    check(dictionary.string == word && primary.pointSize == 19 && entryFont.pointSize == 17 && primary.familyName != entryFont.familyName,
+          "Dictionary entries use a distinct serif face while preserving the full translation: " + heading)
+}
+let plain = SelectionFormatting.translationResult(output)
+check((plain.attribute(.font, at: token.location, effectiveRange: nil) as! NSFont).isFixedPitch,
+      "Ordinary translations keep technical identifiers and their original typography")
 print("All formatting checks passed; system clipboard and Google accounts unchanged.")
 let service = TranslationService()
 var units: [(String, (Result<String, Error>) -> Void)] = []

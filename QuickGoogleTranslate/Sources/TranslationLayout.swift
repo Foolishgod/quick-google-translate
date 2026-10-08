@@ -138,6 +138,26 @@ struct SelectionFormatting {
         }
         return "<html><meta charset=\"utf-8\"><body>" + body + "</body></html>"
     }
+    static func translationResult(_ text: String) -> NSAttributedString {
+        let output = NSMutableAttributedString(attributedString: display(nil, text: text, size: 19))
+        for heading in ["常见释义", "Word meanings"] {
+            guard let divider = text.range(of: "\n\n" + heading + "\n") else { continue }
+            let start = NSRange(divider, in: text).location + 2
+            let body = NSRange(location: start + (heading as NSString).length + 1,
+                               length: output.length - start - (heading as NSString).length - 1)
+            // Songti gives Chinese dictionary entries a distinct, readable serif face.
+            let system = NSFont.systemFont(ofSize: 17)
+            let descriptor = system.fontDescriptor.withDesign(.serif) ?? system.fontDescriptor
+            let serif = NSFont(name: "Songti SC", size: 17)
+                ?? NSFont(descriptor: descriptor, size: 17) ?? system
+            output.addAttribute(.font, value: serif, range: body)
+            output.addAttributes([.font: NSFont.systemFont(ofSize: 13, weight: .semibold),
+                                  .foregroundColor: NSColor.secondaryLabelColor],
+                                 range: NSRange(location: start, length: (heading as NSString).length))
+            break
+        }
+        return output
+    }
     static func display(_ source: NSAttributedString?, text: String, size: CGFloat) -> NSAttributedString {
         let output = NSMutableAttributedString(string: text)
         let full = NSRange(location: 0, length: output.length)

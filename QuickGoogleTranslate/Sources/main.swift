@@ -32,6 +32,11 @@ final class GlassCard: NSView {
 
 final class InputTextView: NSTextView {
     var submit: (() -> Void)?
+    var compositionEnded: (() -> Void)?
+    override func unmarkText() {
+        super.unmarkText()
+        compositionEnded?()
+    }
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.keyCode == 36 && event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command {
             submit?(); return true
@@ -48,6 +53,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     var requestedEnglish = false
     var activeEnglish = false
     var manualInput = false
+    var automaticTranslationTimer: Timer?
+    var automaticTranslationDelay: TimeInterval = 0.65
     var submitButton: NSButton!
     var advancedControls: [NSControl] = []
     var settingsTabs: NSTabView?
@@ -94,6 +101,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     let languages = [("简体中文", "zh-CN"), ("繁體中文", "zh-TW"), ("English", "en"), ("日本語", "ja"), ("한국어", "ko"), ("Français", "fr"), ("Deutsch", "de"), ("Español", "es")]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if CommandLine.arguments.contains("--verify-auto-input") {
+            verifyAutomaticInput(); return
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--verify-foreground"), CommandLine.arguments.count > index + 1 {
             verifyForegroundPopup(URL(fileURLWithPath: CommandLine.arguments[index + 1])); return
         }
@@ -199,9 +209,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             if CommandLine.arguments.contains("--preview-word") {
                 sourceText = "bank"; sourceView.string = sourceText
                 translatedText = "银行\n\n常见释义\n名词 · 银行；岸；岸边\n动词 · 存款；倾斜"
-                resultView.textStorage?.setAttributedString(SelectionFormatting.display(nil, text: translatedText, size: 19))
+                resultView.textStorage?.setAttributedString(SelectionFormatting.translationResult(translatedText))
             }
-            message.stringValue = "⌘ Return 翻译 · Esc 关闭"
+            message.stringValue = "输入后自动翻译 · Esc 关闭"
             copyButton.isEnabled = true
             panel.appearance = NSAppearance(named: CommandLine.arguments.contains("--preview-dark") ? .darkAqua : .aqua)
             panel.center()
@@ -362,6 +372,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         sourceView.isAutomaticSpellingCorrectionEnabled = false
         sourceView.delegate = self
         (sourceView as? InputTextView)?.submit = { [weak self] in self?.submitInput() }
+        (sourceView as? InputTextView)?.compositionEnded = { [weak self] in self?.scheduleAutomaticTranslation() }
         let (resultScroll, result) = textArea(font: .systemFont(ofSize: 19))
         resultView = result
         message = NSTextField(labelWithString: "新选区翻译 · 同文关闭 · Esc")
@@ -522,6 +533,89 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         check(!busy && reads.isEmpty, "Selection reader returns to idle")
         print("All selection-aware shortcut checks passed; no network, clipboard or permissions changed.")
     }
+    func verifyAutomaticInput() {
+        createPanel()
+        automaticTranslationDelay = 0.05
+        var requests: [(String, String, (Result<String, Error>) -> Void)] = []
+        translatorForVerification = { text, target, complete in requests.append((text, target, complete)) }
+        func check(_ value: Bool, _ label: String) { precondition(value, label); print("PASS: " + label) }
+        func edit(_ text: String) {
+            sourceView.string = text
+            textDidChange(Notification(name: NSText.didChangeNotification, object: sourceView))
+        }
+        Task { @MainActor in
+            func pause() async { try? await Task.sleep(nanoseconds: 120_000_000) }
+            showManualInput()
+            edit("b"); edit("ba"); edit("bank")
+            sourceView.setSelectedRange(NSRange(location: 2, length: 0))
+            await pause()
+            check(requests.count == 1 && requests[0].0 == "bank", "Rapid typing automatically submits only the last draft")
+            check(sourceView.selectedRange().location == 2 && panel.firstResponder === sourceView,
+                  "Automatic translation preserves the caret and input focus")
+            edit("light")
+            requests[0].2(.success("Obsolete bank result"))
+            check(resultView.string.isEmpty && !copyButton.isEnabled, "Editing immediately rejects late results and stale copying")
+            await pause()
+            requests.last!.2(.success("光\n\n常见释义\n名词 · 光；灯\n形容词 · 轻的"))
+            check(requests.count == 2 && copyButton.isEnabled && resultView.string.contains("常见释义"),
+                  "The newest draft shows dictionary meanings and enables copying")
+            await pause()
+            check(requests.count == 2, "An unchanged draft does not repeatedly translate")
+            edit("  \n  ")
+            await pause()
+            check(requests.count == 2 && !copyButton.isEnabled, "Whitespace input clears stale results without a request")
+            edit(String(repeating: "中", count: 5001))
+            await pause()
+            check(requests.count == 2 && sourceView.string.count == 5001 && message.stringValue.contains("5,000"),
+                  "Oversized automatic input stays editable and does not submit")
+            edit("  bank  ")
+            sourceView.setSelectedRange(NSRange(location: 4, length: 0))
+            await pause()
+            check(requests.count == 3 && requests.last!.0 == "bank" && sourceView.string == "  bank  " && sourceView.selectedRange().location == 4,
+                  "Request normalization preserves the original editor text and caret")
+            edit("manual")
+            submitInput()
+            await pause()
+            check(requests.count == 4 && requests.last!.0 == "manual", "Immediate submission cancels the pending automatic request")
+            edit("")
+            sourceView.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: 0, length: 0))
+            textDidChange(Notification(name: NSText.didChangeNotification, object: sourceView))
+            await pause()
+            check(sourceView.hasMarkedText() && requests.count == 4, "Unconfirmed input method composition never submits")
+            sourceView.setMarkedText("你好", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+            sourceView.unmarkText()
+            await pause()
+            check(requests.count == 5 && requests.last!.0 == "你好", "Input method confirmation automatically submits the final characters")
+            edit("pending")
+            closePanel()
+            requests.last!.2(.success("Late composition result"))
+            await pause()
+            check(requests.count == 5 && !panel.isVisible && !copyButton.isEnabled,
+                  "Closing cancels automatic input and late results cannot reopen the window")
+            showManualInput(english: false)
+            edit("中文")
+            showManualInput(clear: false, english: true)
+            await pause()
+            check(requests.count == 6 && requests.last!.0 == "中文" && requests.last!.1 == "en",
+                  "Direction changes replace pending input with Chinese-to-English translation")
+            edit("before settings")
+            showSettings()
+            await pause()
+            check(requests.count == 6, "Opening settings cancels pending automatic input")
+            settings?.orderOut(nil)
+            closePanel()
+            showManualInput()
+            edit("before recording")
+            recorder = Recorder()
+            beginRecording(english: false)
+            await pause()
+            check(requests.count == 6, "Shortcut recording cancels pending automatic input")
+            recorder?.recording = false
+            closePanel()
+            print("All automatic input checks passed; no network, clipboard, permissions or saved settings changed.")
+            NSApp.terminate(nil)
+        }
+    }
     func verifyManualInput() {
         createPanel()
         var reads: [(String?) -> Void] = []
@@ -605,7 +699,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             // Failure to read a selection is not evidence that it matches the current source.
             message.stringValue = "未读到有效新选区 · Esc 关闭"
             message.toolTip = text
-        } else { showManualInput(english: requestedEnglish); message.stringValue = "可手动输入 · ⌘ Return 翻译"; message.toolTip = text }
+        } else { showManualInput(english: requestedEnglish); message.stringValue = "可手动输入 · 输入后自动翻译"; message.toolTip = text }
     }
     func finishSelectionRead() {
         busy = false
@@ -908,6 +1002,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         panel.orderFrontRegardless()
     }
     func showMessage(_ text: String) {
+        cancelAutomaticTranslation()
         generation += 1
         translationService.cancel()
         spinner.stopAnimation(nil)
@@ -922,12 +1017,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         retryButton.isHidden = true
         presentPanel()
     }
-    func showTranslation(_ raw: String, formatting: NSAttributedString? = nil, english: Bool = false) {
+    func showTranslation(_ raw: String, formatting: NSAttributedString? = nil, english: Bool = false, preserveInput: Bool = false) {
+        cancelAutomaticTranslation()
         let text: String
         do { text = try TranslationRequest.normalize(raw) }
         catch { showMessage(error.localizedDescription); return }
         activeEnglish = english
-        manualInput = false
+        manualInput = preserveInput
         let target = english ? "en" : UserDefaults.standard.string(forKey: "targetLanguage") ?? "zh-CN"
         let chrome = ["chrome", "browser"].contains(UserDefaults.standard.string(forKey: "translationBackend") ?? "google")
         let source = english ? "zh-CN" : (chrome ? UserDefaults.standard.string(forKey: "chromeSourceLanguage") ?? "en" : "auto")
@@ -936,8 +1032,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         sourceText = text; translatedText = ""
         sourceFormatting = formatting
         message.toolTip = nil
-        sourceView.textStorage?.setAttributedString(SelectionFormatting.display(formatting, text: text, size: 15))
-        sourceView.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        if !preserveInput {
+            sourceView.textStorage?.setAttributedString(SelectionFormatting.display(formatting, text: text, size: 15))
+            sourceView.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        }
         resultView.string = "正在翻译…"
         resultView.textColor = .secondaryLabelColor
         copyButton.isEnabled = false
@@ -946,7 +1044,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         message.stringValue = chrome ? "网页高级翻译中…" : "Google 翻译"
         generation += 1
         let requestGeneration = generation
-        presentPanel()
+        if !preserveInput { presentPanel() }
         let completion: (Result<String, Error>) -> Void = { [weak self] result in
             guard let self, self.generation == requestGeneration else { return }
             self.spinner.stopAnimation(nil)
@@ -954,10 +1052,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             switch result {
             case .success(let translated):
                 self.translatedText = translated
-                self.resultView.textStorage?.setAttributedString(SelectionFormatting.display(nil, text: translated, size: 19))
+                self.resultView.textStorage?.setAttributedString(SelectionFormatting.translationResult(translated))
                 self.resultView.scrollRangeToVisible(NSRange(location: 0, length: 0))
                 self.copyButton.isEnabled = true
-                self.message.stringValue = self.manualInput ? "⌘ Return 翻译 · Esc 关闭" : "新选区翻译 · 同文关闭 · Esc"
+                self.message.stringValue = self.manualInput ? "输入后自动翻译 · Esc 关闭" : "新选区翻译 · 同文关闭 · Esc"
             case .failure(let error):
                 self.resultView.string = error.localizedDescription
                 self.retryButton.isHidden = false
@@ -970,6 +1068,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         } else { translationService.translate(text: text, target: target, source: source, completion: completion) }
     }
     func showManualInput(clear: Bool = true, english: Bool? = nil) {
+        cancelAutomaticTranslation()
         let changedDirection = english.map { $0 != activeEnglish } ?? false
         if let english { activeEnglish = english }
         manualInput = true
@@ -985,23 +1084,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             retryButton.isHidden = true
         }
         languageLabel.stringValue = activeEnglish ? "中文 → English" : "输入 → " + (languages.first { $0.1 == (UserDefaults.standard.string(forKey: "targetLanguage") ?? "zh-CN") }?.0 ?? "简体中文")
-        message.stringValue = "输入文字 · ⌘ Return 翻译 · Esc 关闭"
+        message.stringValue = "输入后自动翻译 · Esc 关闭"
         message.toolTip = nil
         presentPanel()
         panel.makeFirstResponder(sourceView)
+        if !clear && changedDirection { scheduleAutomaticTranslation() }
     }
     @objc func openManualTranslation() {
         invalidateSelectionReads()
         showManualInput(clear: !panel.isVisible, english: false)
     }
     @objc func submitInput() {
+        cancelAutomaticTranslation()
         guard !sourceView.hasMarkedText() else { message.stringValue = "请先确认输入法中的文字。"; return }
         let input = sourceView.string
         do { _ = try TranslationRequest.normalize(input) }
         catch { message.stringValue = error.localizedDescription; return }
         invalidateSelectionReads()
-        showTranslation(input, english: activeEnglish)
-        manualInput = true
+        showTranslation(input, english: activeEnglish, preserveInput: true)
         panel.makeFirstResponder(sourceView)
     }
     func textDidChange(_ notification: Notification) {
@@ -1014,9 +1114,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         resultView.string = ""
         copyButton.isEnabled = false
         retryButton.isHidden = true
-        message.stringValue = "文字已修改 · ⌘ Return 翻译"
+        scheduleAutomaticTranslation()
+    }
+    func cancelAutomaticTranslation() {
+        automaticTranslationTimer?.invalidate()
+        automaticTranslationTimer = nil
+    }
+    func scheduleAutomaticTranslation() {
+        cancelAutomaticTranslation()
+        guard manualInput, panelPresented, panel.isVisible,
+              recorder?.recording != true, englishRecorder?.recording != true else { return }
+        guard !sourceView.hasMarkedText() else { message.stringValue = "选字完成后自动翻译"; return }
+        let input = sourceView.string
+        guard !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            message.stringValue = "输入后自动翻译 · Esc 关闭"; return
+        }
+        do { _ = try TranslationRequest.normalize(input) }
+        catch { message.stringValue = error.localizedDescription; return }
+        message.stringValue = "停止输入后自动翻译…"
+        let revision = generation
+        let english = activeEnglish
+        let timer = Timer(timeInterval: automaticTranslationDelay, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.automaticTranslationTimer = nil
+            guard self.generation == revision, self.activeEnglish == english,
+                  self.manualInput, self.panelPresented, self.panel.isVisible,
+                  self.sourceView.string == input, !self.sourceView.hasMarkedText(),
+                  self.recorder?.recording != true, self.englishRecorder?.recording != true else { return }
+            self.submitInput()
+        }
+        automaticTranslationTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
     @objc func retryTranslation() {
+        if manualInput { submitInput(); return }
         if !sourceText.isEmpty { invalidateSelectionReads(); showTranslation(sourceText, formatting: sourceFormatting, english: activeEnglish) }
     }
     @objc func copyTranslation() {
@@ -1032,6 +1163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         showTranslation(formatting?.string ?? clipboard.string(forType: .string) ?? "", formatting: formatting)
     }
     @objc func closePanel() {
+        cancelAutomaticTranslation()
         manualInput = false
         panelPresented = false
         presentedSourcePID = nil
@@ -1048,6 +1180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
     }
     @objc func showSettings() {
+        cancelAutomaticTranslation()
         if let settings { updatePermissionStatus(); NSApp.activate(ignoringOtherApps: true); settings.makeKeyAndOrderFront(nil); return }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 590), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "划词谷歌翻译 · 设置"
@@ -1135,7 +1268,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         tab("快捷键", [help("两组独立快捷键，分别用于日常阅读和中文写作。"),
             row("普通翻译", record), help("翻译到你设置的目标语言。默认 Option + 空格。"),
             row("中文 → 英文", englishRecord), help("默认 Option + Shift + 空格，可自定义。"), status,
-            help("选新文字再次按快捷键会换译文；相同文字与方向再次按会关闭。没有选区会进入手动输入，⌘ Return 翻译，Return 换行。")])
+            help("选新文字再次按快捷键会换译文；相同文字与方向再次按会关闭。没有选区会进入手动输入，停止输入后自动翻译，Return 换行。")])
 
         let permission = NSTextField(labelWithString: "")
         permission.font = .systemFont(ofSize: 13, weight: .medium)
@@ -1215,6 +1348,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     @objc func startRecording() { beginRecording(english: false) }
     @objc func startEnglishRecording() { beginRecording(english: true) }
     func beginRecording(english: Bool) {
+        cancelAutomaticTranslation()
         let control = english ? englishRecorder : recorder
         if control?.recording == true { cancelRecording(english: english); return }
         if recorder?.recording == true { cancelRecording(english: false) }

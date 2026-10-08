@@ -6,6 +6,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Framewor
 swiftc -swift-version 5 -O -target arm64-apple-macosx13.0 -module-cache-path .build/module-cache Sources/main.swift Sources/KeyboardShortcut.swift Sources/TranslationLayout.swift Sources/TranslationService.swift Sources/AccessibilityPermission.swift Sources/ChromeBridge.swift Sources/BackgroundBrowser.swift Sources/AppMaintenance.swift -F Vendor/Sparkle -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks -o "$APP/Contents/MacOS/QuickGoogleTranslate" -framework AppKit -framework WebKit -framework Carbon -framework ApplicationServices -framework Security -framework Network
 cp Info.plist "$APP/Contents/Info.plist"
 cp BrowserTranslate.js "$APP/Contents/Resources/BrowserTranslate.js"
+cp Assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 /usr/bin/ditto Vendor/Sparkle/Sparkle.framework "$APP/Contents/Frameworks/Sparkle.framework"
 cp Vendor/Sparkle/LICENSE "$APP/Contents/Resources/Sparkle-LICENSE.txt"
 zsh ../QuickGoogleTranslateUninstaller/build.sh
