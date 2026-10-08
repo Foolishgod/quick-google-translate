@@ -440,6 +440,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
     func handleShortcut(english: Bool = false) {
         guard recorder?.recording != true, englishRecorder?.recording != true else { return }
+        cancelAutomaticTranslation()
         requestedEnglish = english
         if panel.isKeyWindow && manualInput && selectionReaderForVerification == nil {
             invalidateSelectionReads()
@@ -605,11 +606,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             settings?.orderOut(nil)
             closePanel()
             showManualInput()
+            var read: ((String?) -> Void)?
+            selectionReaderForVerification = { read = $0 }
+            edit("draft before new selection")
+            handleShortcut()
+            await pause()
+            check(requests.count == 6 && read != nil, "A selection shortcut cancels the pending draft before reading another application")
+            read?("new selected text")
+            check(requests.count == 7 && requests.last!.0 == "new selected text", "The new selection wins after a delayed selection read")
+            selectionReaderForVerification = nil
             edit("before recording")
             recorder = Recorder()
             beginRecording(english: false)
             await pause()
-            check(requests.count == 6, "Shortcut recording cancels pending automatic input")
+            check(requests.count == 7, "Shortcut recording cancels pending automatic input")
             recorder?.recording = false
             closePanel()
             print("All automatic input checks passed; no network, clipboard, permissions or saved settings changed.")
