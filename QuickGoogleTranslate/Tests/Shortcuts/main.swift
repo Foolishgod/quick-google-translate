@@ -75,6 +75,22 @@ final class Checks: NSObject, NSApplicationDelegate {
             check(!owner.register(occupied) && owner.reference == reference && owner.registeredShortcut!.matches(original), "Failed replacement preserves the working shortcut")
             blocker.unregister()
             check(owner.register(occupied) && owner.registeredShortcut!.matches(occupied), "Replacement works once conflict is released")
+            var normalEvents = 0, englishEvents = 0
+            owner.action = { normalEvents += 1 }
+            blocker.action = { englishEvents += 1 }
+            func send(_ identifier: UInt32) {
+                var event: EventRef?
+                check(CreateEvent(nil, OSType(kEventClassKeyboard), UInt32(kEventHotKeyPressed), 0, 0, &event) == noErr, "Create controlled hotkey event")
+                var id = EventHotKeyID(signature: 0x51475452, id: identifier)
+                check(SetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), MemoryLayout<EventHotKeyID>.size, &id) == noErr, "Attach independent hotkey identity")
+                _ = SendEventToEventTarget(event, GetApplicationEventTarget())
+                ReleaseEvent(event)
+            }
+            send(owner.identifier)
+            check(normalEvents == 1 && englishEvents == 0, "Normal hotkey event invokes only its own action")
+            send(blocker.identifier)
+            check(normalEvents == 1 && englishEvents == 1, "Chinese-to-English hotkey event invokes only its own action")
+            check(owner.identifier != blocker.identifier && !Shortcut.standard.matches(.englishStandard), "Independent IDs and distinct default shortcuts")
             owner.unregister()
             for shortcut in Shortcut.spaceChoices {
                 let accepted = owner.register(shortcut)

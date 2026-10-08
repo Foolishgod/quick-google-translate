@@ -1,6 +1,5 @@
 import AppKit
 import WebKit
-import Security
 
 struct TranslationRequest {
     static func normalize(_ raw: String) throws -> String {
@@ -9,13 +8,13 @@ struct TranslationRequest {
         while lines.first?.trimmingCharacters(in: .whitespaces).isEmpty == true { lines.removeFirst() }
         while lines.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { lines.removeLast() }
         let value = lines.count > 1 ? lines.joined(separator: "\n") : normalized.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { throw TranslationError.message("请先选中一段文字。") }
-        guard value.count <= 5000 else { throw TranslationError.message("文字太长，请选取 5,000 字以内的内容。") }
+        guard !value.isEmpty else { throw TranslationError.message("请输入要翻译的文字。") }
+        guard value.count <= 5000 else { throw TranslationError.message("文字太长，请输入 5,000 字以内的内容。") }
         return value
     }
-    static func pageURL(text: String, target: String) -> URL {
+    static func pageURL(text: String, target: String, source: String = "auto") -> URL {
         var c = URLComponents(string: "https://translate.google.com/")!
-        c.queryItems = [URLQueryItem(name: "sl", value: "auto"), URLQueryItem(name: "tl", value: target), URLQueryItem(name: "text", value: text), URLQueryItem(name: "op", value: "translate")]
+        c.queryItems = [URLQueryItem(name: "sl", value: source), URLQueryItem(name: "tl", value: target), URLQueryItem(name: "text", value: text), URLQueryItem(name: "op", value: "translate")]
         return c.url!
     }
     static func parsePublicResponse(_ data: Data) throws -> String {
@@ -24,16 +23,6 @@ struct TranslationRequest {
         let text = segments.compactMap { $0.first as? String }.joined()
         guard !text.isEmpty else { throw TranslationError.message("未能获取译文，请重试。") }
         return text
-    }
-    static func parseOfficialResponse(_ data: Data) throws -> String {
-        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let content = root["data"] as? [String: Any],
-              let translations = content["translations"] as? [[String: Any]],
-              let value = translations.first?["translatedText"] as? String, !value.isEmpty else {
-            throw TranslationError.message("Google Cloud 未返回译文，请检查连接设置。")
-        }
-        // Google encodes HTML entities even when format is text.
-        return decodeEntities(value)
     }
     static func decodeEntities(_ value: String) -> String {
         let entities = ["quot": "\"", "apos": "'", "amp": "&", "lt": "<", "gt": ">"]
@@ -50,32 +39,47 @@ struct TranslationRequest {
         }
         return result
     }
+    static func isSingleWord(_ text: String) -> Bool {
+        let word = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard word.count <= 80 else { return false }
+        return word.range(of: #"^\p{Latin}+(?:['’\-]\p{Latin}+)*$"#, options: .regularExpression) != nil ||
+            word.range(of: #"^\p{Han}{1,8}$"#, options: .regularExpression) != nil
+    }
+    static func publicURL(text: String, source: String, target: String, dictionary: Bool) -> URL {
+        var c = URLComponents(string: "https://translate.googleapis.com/translate_a/single")!
+        c.queryItems = [URLQueryItem(name: "client", value: "gtx"), URLQueryItem(name: "sl", value: source),
+                       URLQueryItem(name: "tl", value: target), URLQueryItem(name: "dt", value: "t")]
+        if dictionary { c.queryItems!.append(URLQueryItem(name: "dt", value: "bd")) }
+        c.queryItems!.append(URLQueryItem(name: "q", value: text))
+        return c.url!
+    }
+    static func dictionaryMeanings(_ data: Data, target: String) -> [String] {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [Any], root.count > 1,
+              let groups = root[1] as? [[Any]] else { return [] }
+        let names = ["noun": "名词", "verb": "动词", "adjective": "形容词", "adverb": "副词",
+                     "pronoun": "代词", "preposition": "介词", "conjunction": "连词", "interjection": "感叹词"]
+        var output: [String] = []
+        for group in groups.prefix(8) {
+            guard group.count > 1, let part = group[0] as? String, let words = group[1] as? [String] else { continue }
+            var seen = Set<String>()
+            let clean = words.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && seen.insert($0).inserted }.prefix(12)
+            guard !clean.isEmpty else { continue }
+            let label = target.hasPrefix("zh") ? (names[part] ?? part) : part
+            output.append((label.isEmpty ? "" : label + " · ") + clean.joined(separator: "；"))
+        }
+        return output
+    }
+    static func withMeanings(_ translation: String, meanings: [String], target: String) -> String {
+        guard !meanings.isEmpty else { return translation }
+        let title = target.hasPrefix("zh") ? "常见释义" : "Word meanings"
+        return translation + "\n\n" + title + "\n" + meanings.joined(separator: "\n")
+    }
+
 }
 enum TranslationError: LocalizedError {
     case message(String)
     var errorDescription: String? { if case .message(let text) = self { return text }; return nil }
-}
-
-struct APIKeyStore {
-    static let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.quickgoogletranslate.mac", kSecAttrAccount as String: "google-cloud-key"]
-    static func read() -> String? {
-        var q = query
-        q[kSecReturnData as String] = true
-        q[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-    static func save(_ value: String) -> Bool {
-        if value.isEmpty { let status = SecItemDelete(query as CFDictionary); return status == errSecSuccess || status == errSecItemNotFound }
-        let data = Data(value.utf8)
-        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if status == errSecItemNotFound {
-            var q = query; q[kSecValueData as String] = data
-            return SecItemAdd(q as CFDictionary, nil) == errSecSuccess
-        }
-        return status == errSecSuccess
-    }
 }
 
 // The visible UI is always native. A private web view is only a fallback transport.
@@ -90,12 +94,23 @@ final class TranslationService: NSObject, WKNavigationDelegate {
     var layout: TranslationLayout?
     var unitResults: [String] = []
     var targetLanguage = ""
+    var sourceLanguage = "auto"
+    var originalText = ""
+    var wordMeanings: [String] = []
+    var dictionaryAttempted = false
     var unitTranslatorForVerification: ((String, String, @escaping (Result<String, Error>) -> Void) -> Void)?
+    var requestLoaderForVerification: ((URLRequest) async throws -> (Data, URLResponse))?
+    var backendForVerification: String?
+    var backend = "google"
     var polling = false
+    func loadRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        if let loader = requestLoaderForVerification { return try await loader(request) }
+        return try await URLSession.shared.data(for: request)
+    }
     func cancel() {
         token = UUID()
         clearTransport()
-        layout = nil; unitResults = []; completion = nil
+        layout = nil; unitResults = []; wordMeanings = []; completion = nil
     }
     func clearTransport() {
         unitToken = UUID()
@@ -106,11 +121,16 @@ final class TranslationService: NSObject, WKNavigationDelegate {
         web?.stopLoading(); web?.navigationDelegate = nil; web = nil
         navigation = nil; polling = false
     }
-    func translate(text: String, target: String, completion: @escaping (Result<String, Error>) -> Void) {
+    func translate(text: String, target: String, source: String? = nil, completion: @escaping (Result<String, Error>) -> Void) {
         cancel()
         self.completion = completion
         layout = TranslationLayout(text)
         targetLanguage = target
+        originalText = text
+        dictionaryAttempted = false
+        backend = backendForVerification ?? UserDefaults.standard.string(forKey: "translationBackend") ?? "google"
+        sourceLanguage = source ?? (["browser", "chrome"].contains(backend)
+            ? UserDefaults.standard.string(forKey: "chromeSourceLanguage") ?? "en" : "auto")
         if layout!.requests.isEmpty {
             let output = layout!.assemble([])
             cancel(); completion(.success(output)); return
@@ -126,49 +146,40 @@ final class TranslationService: NSObject, WKNavigationDelegate {
             }
             return
         }
-        if UserDefaults.standard.string(forKey: "translationBackend") == "browser" {
-            BackgroundBrowser.shared.translate(text: text, source: UserDefaults.standard.string(forKey: "chromeSourceLanguage") ?? "en", target: target) { [weak self] result in
+        if backend == "browser" {
+            BackgroundBrowser.shared.translate(text: text, source: sourceLanguage, target: target) { [weak self] result in
                 guard let self, self.unitToken == requestToken else { return }
                 self.finish(result)
             }
             return
         }
-        if UserDefaults.standard.string(forKey: "translationBackend") == "chrome" {
-            ChromeBridge.shared.translate(text: text, source: UserDefaults.standard.string(forKey: "chromeSourceLanguage") ?? "en", target: target) { [weak self] result in
+        if backend == "chrome" {
+            ChromeBridge.shared.translate(text: text, source: sourceLanguage, target: target) { [weak self] result in
                 guard let self, self.unitToken == requestToken else { return }
                 self.finish(result)
             }
             return
         }
-        let key = APIKeyStore.read()
         task = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                var request: URLRequest
-                if let key, !key.isEmpty {
-                    request = URLRequest(url: URL(string: "https://translation.googleapis.com/language/translate/v2")!)
-                    request.httpMethod = "POST"
-                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                    request.setValue(key, forHTTPHeaderField: "X-Goog-Api-Key")
-                    request.httpBody = try JSONSerialization.data(withJSONObject: ["q": text, "target": target, "format": "text"])
-                    request.timeoutInterval = 20
-                } else {
-                    var c = URLComponents(string: "https://translate.googleapis.com/translate_a/single")!
-                    c.queryItems = [URLQueryItem(name: "client", value: "gtx"), URLQueryItem(name: "sl", value: "auto"), URLQueryItem(name: "tl", value: target), URLQueryItem(name: "dt", value: "t"), URLQueryItem(name: "q", value: text)]
-                    request = URLRequest(url: c.url!)
-                    request.timeoutInterval = 4
-                }
-                let (data, response) = try await URLSession.shared.data(for: request)
+                let dictionary = TranslationRequest.isSingleWord(self.originalText)
+                var request = URLRequest(url: TranslationRequest.publicURL(text: text, source: self.sourceLanguage, target: target, dictionary: dictionary))
+                request.timeoutInterval = 6
+                let (data, response) = try await self.loadRequest(request)
                 guard self.unitToken == requestToken, !Task.isCancelled else { return }
                 guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                    throw TranslationError.message(key == nil ? "Google 连接暂不可用。" : "Google Cloud 连接失败，请检查密钥、API 启用状态和配额。")
+                    throw TranslationError.message("Google 连接暂不可用。")
                 }
-                let result = try key == nil ? TranslationRequest.parsePublicResponse(data) : TranslationRequest.parseOfficialResponse(data)
+                let result = try TranslationRequest.parsePublicResponse(data)
+                if dictionary {
+                    self.dictionaryAttempted = true
+                    self.wordMeanings = TranslationRequest.dictionaryMeanings(data, target: target)
+                }
                 self.finish(.success(result))
             } catch {
                 guard self.unitToken == requestToken, !Task.isCancelled else { return }
-                if key == nil { self.loadBackgroundPage(text: text, target: target, token: requestToken) }
-                else { self.finish(.failure(error)) }
+                self.loadBackgroundPage(text: text, target: target, token: requestToken)
             }
         }
     }
@@ -178,7 +189,7 @@ final class TranslationService: NSObject, WKNavigationDelegate {
         let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 650), configuration: config)
         view.navigationDelegate = self
         web = view
-        navigation = view.load(URLRequest(url: TranslationRequest.pageURL(text: text, target: target), timeoutInterval: 20))
+        navigation = view.load(URLRequest(url: TranslationRequest.pageURL(text: text, target: target, source: sourceLanguage), timeoutInterval: 20))
         var ticks = 0
         timer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
             guard let self, self.unitToken == token else { return }
@@ -227,6 +238,32 @@ final class TranslationService: NSObject, WKNavigationDelegate {
             self.finish(.success(text))
         }
     }
+    func finishDocument(_ output: String) {
+        guard TranslationRequest.isSingleWord(originalText), !dictionaryAttempted, (unitTranslatorForVerification == nil || requestLoaderForVerification != nil) else {
+            let result = TranslationRequest.withMeanings(output, meanings: wordMeanings, target: targetLanguage)
+            let callback = completion
+            cancel(); callback?(.success(result)); return
+        }
+        // Dictionary lookup is optional: failures never discard a successful translation.
+        dictionaryAttempted = true
+        let requestToken = token
+        let target = targetLanguage
+        let url = TranslationRequest.publicURL(text: originalText, source: sourceLanguage, target: target, dictionary: true)
+        clearTransport()
+        task = Task { @MainActor [weak self] in
+            var meanings: [String] = []
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 4
+            if let (data, response) = try? await self?.loadRequest(request),
+               let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
+                meanings = TranslationRequest.dictionaryMeanings(data, target: target)
+            }
+            guard let self, self.token == requestToken, !Task.isCancelled else { return }
+            let result = TranslationRequest.withMeanings(output, meanings: meanings, target: target)
+            let callback = self.completion
+            self.cancel(); callback?(.success(result))
+        }
+    }
     func finish(_ result: Result<String, Error>) {
         if case .success(let text) = result, let layout {
             unitResults.append(text)
@@ -236,8 +273,7 @@ final class TranslationService: NSObject, WKNavigationDelegate {
                 return
             }
             let output = layout.assemble(unitResults)
-            let callback = completion
-            cancel(); callback?(.success(output)); return
+            finishDocument(output); return
         }
         let callback = completion
         cancel()

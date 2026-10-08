@@ -7,6 +7,8 @@ mkdir -p "$MODULE/.build/module-cache" QuickGoogleTranslateUninstaller/.build/mo
 COMMON=("$MODULE/Sources/TranslationLayout.swift" "$MODULE/Sources/TranslationService.swift" "$MODULE/Sources/ChromeBridge.swift" "$MODULE/Sources/BackgroundBrowser.swift")
 FRAMEWORKS=(-framework AppKit -framework WebKit -framework ApplicationServices -framework Security -framework Network)
 swiftc -swift-version 5 -O -module-cache-path "$MODULE/.build/module-cache" "${COMMON[@]}" "$MODULE/Sources/AccessibilityPermission.swift" "$MODULE/Tests/main.swift" "${FRAMEWORKS[@]}" -o "$MODULE/.build/source-core-checks"
+swiftc -swift-version 5 -O -module-cache-path "$MODULE/.build/module-cache" "${COMMON[@]}" "$MODULE/Tests/Translation/main.swift" "${FRAMEWORKS[@]}" -o "$MODULE/.build/source-translation-checks"
+"$MODULE/.build/source-translation-checks"
 "$MODULE/.build/source-core-checks"
 if [[ "${1:-}" == "--native" || "${1:-}" == "--chrome" ]]; then
     swiftc -swift-version 5 -O -module-cache-path "$MODULE/.build/module-cache" "${COMMON[@]}" "$MODULE/Tests/Formatting/main.swift" "${FRAMEWORKS[@]}" -o "$MODULE/.build/source-formatting-checks"
@@ -54,6 +56,7 @@ PY
         "$APP_EXECUTABLE" --verify-foreground "$PWD/$MODULE/.build/ForegroundFixture.app/Contents/MacOS/ForegroundFixture"
         "$APP_EXECUTABLE" --verify-pinning
         "$APP_EXECUTABLE" --verify-selection
+        "$APP_EXECUTABLE" --verify-input
     else
         print 'Build the application first to also run foreground popup checks.'
     fi

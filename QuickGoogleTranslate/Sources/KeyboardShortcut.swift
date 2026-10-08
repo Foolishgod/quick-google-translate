@@ -6,6 +6,7 @@ struct Shortcut {
     var modifiers: UInt32
     var label: String
     static let standard = space(modifiers: .option)
+    static let englishStandard = space(modifiers: [.option, .shift])
     static let spaceChoices = [space(modifiers: .control), space(modifiers: .option), space(modifiers: .command)]
 
     static func space(modifiers: NSEvent.ModifierFlags) -> Shortcut {
@@ -24,16 +25,18 @@ struct Shortcut {
         return Shortcut(key: UInt32(key), modifiers: mask, label: label + " " + name)
     }
     func matches(_ other: Shortcut) -> Bool { key == other.key && modifiers == other.modifiers }
-    static var saved: Shortcut {
+    static var saved: Shortcut { load(prefix: "shortcut", fallback: .standard) }
+    static var englishSaved: Shortcut { load(prefix: "englishShortcut", fallback: .englishStandard) }
+    static func load(prefix: String, fallback: Shortcut) -> Shortcut {
         let d = UserDefaults.standard
-        guard d.object(forKey: "shortcutKey") != nil else { return .standard }
-        return Shortcut(key: UInt32(d.integer(forKey: "shortcutKey")), modifiers: UInt32(d.integer(forKey: "shortcutModifiers")), label: d.string(forKey: "shortcutLabel") ?? standard.label)
+        guard d.object(forKey: prefix + "Key") != nil else { return fallback }
+        return Shortcut(key: UInt32(d.integer(forKey: prefix + "Key")), modifiers: UInt32(d.integer(forKey: prefix + "Modifiers")), label: d.string(forKey: prefix + "Label") ?? fallback.label)
     }
-    func save() {
+    func save(prefix: String = "shortcut") {
         let d = UserDefaults.standard
-        d.set(Int(key), forKey: "shortcutKey")
-        d.set(Int(modifiers), forKey: "shortcutModifiers")
-        d.set(label, forKey: "shortcutLabel")
+        d.set(Int(key), forKey: prefix + "Key")
+        d.set(Int(modifiers), forKey: prefix + "Modifiers")
+        d.set(label, forKey: prefix + "Label")
     }
     var conflictsWithSystem: Bool {
         var values: Unmanaged<CFArray>?
@@ -56,18 +59,29 @@ final class HotKey {
             }
         }
     }
+    private static var nextIdentifier: UInt32 = 0
+    let identifier: UInt32
     private(set) var reference: EventHotKeyRef?
     private var handler: EventHandlerRef?
     private(set) var registeredShortcut: Shortcut?
     private(set) var lastFailure: Failure?
     var action: (() -> Void)?
     init() {
+        Self.nextIdentifier += 1
+        identifier = Self.nextIdentifier
         var type = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, _, context in
+        InstallEventHandler(GetApplicationEventTarget(), { _, event, context in
             guard let context else { return OSStatus(eventNotHandledErr) }
-            Unmanaged<HotKey>.fromOpaque(context).takeUnretainedValue().action?()
-            return noErr
+            return Unmanaged<HotKey>.fromOpaque(context).takeUnretainedValue().dispatch(event)
         }, 1, &type, Unmanaged.passUnretained(self).toOpaque(), &handler)
+    }
+    func dispatch(_ event: EventRef?) -> OSStatus {
+        var eventID = EventHotKeyID()
+        guard let event, GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
+            MemoryLayout<EventHotKeyID>.size, nil, &eventID) == noErr,
+            eventID.signature == 0x51475452, eventID.id == identifier else { return OSStatus(eventNotHandledErr) }
+        action?()
+        return noErr
     }
     func register(_ shortcut: Shortcut) -> Bool {
         lastFailure = nil
@@ -75,7 +89,7 @@ final class HotKey {
         // Re-selecting the active combination must not collide with our own registration.
         if reference != nil, registeredShortcut?.matches(shortcut) == true { return true }
         var candidate: EventHotKeyRef?
-        let status = RegisterEventHotKey(shortcut.key, shortcut.modifiers, EventHotKeyID(signature: 0x51475452, id: 1), GetApplicationEventTarget(), 0, &candidate)
+        let status = RegisterEventHotKey(shortcut.key, shortcut.modifiers, EventHotKeyID(signature: 0x51475452, id: identifier), GetApplicationEventTarget(), 0, &candidate)
         guard status == noErr else { lastFailure = .unavailable; return false }
         unregister()
         reference = candidate

@@ -64,7 +64,7 @@ check(results.count == 3 && results.allSatisfy { $0.hasPrefix("已移入") }, "m
 let remainingCookie = try Data(contentsOf:cookie)
 check(fm.fileExists(atPath:other.path) && remainingCookie == Data("retain normal Chrome".utf8), "retain other apps and daily Chrome cookies during cleanup")
 check(keyDeletes == 0, "do not delete an unselected keychain item")
-let key = CleanupItem(kind:.keychain,title:"Google Cloud 密钥",detail:"",url:nil)
+let key = CleanupItem(kind:.keychain,title:"旧版连接密钥",detail:"",url:nil)
 let keyResult = plan.remove([key],syncPreferences:false,trash:{_ in fatalError("keychain must not use file removal")},deleteKey:{keyDeletes += 1; return errSecSuccess})
 check(keyDeletes == 1 && keyResult[0].hasPrefix("已删除"), "delete only the selected app-specific keychain item")
 check(plan.keyQuery[kSecAttrService as String] as? String == UninstallPlan.identifier && plan.keyQuery[kSecAttrAccount as String] as? String == "google-cloud-key", "use the exact keychain service and account")

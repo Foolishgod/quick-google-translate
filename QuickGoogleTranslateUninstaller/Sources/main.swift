@@ -160,7 +160,7 @@ final class Uninstaller: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard !selected.isEmpty else { return }
         let confirmation = NSAlert(); confirmation.alertStyle = .warning
         confirmation.messageText = "卸载所选的 \(selected.count) 个项目？"
-        confirmation.informativeText = "将先退出翻译应用及它的专用浏览器，再把所选文件移入废纸篓。\n\n" + selected.map(\.title).joined(separator: "\n") + (selected.contains { $0.kind == .keychain } ? "\n\nGoogle Cloud 密钥将永久删除，无法从废纸篓恢复。" : "")
+        confirmation.informativeText = "将先退出翻译应用及它的专用浏览器，再把所选文件移入废纸篓。\n\n" + selected.map(\.title).joined(separator: "\n") + (selected.contains { $0.kind == .keychain } ? "\n\n旧版连接密钥将永久删除，无法从废纸篓恢复。" : "")
         confirmation.addButton(withTitle: "卸载"); confirmation.addButton(withTitle: "取消")
         confirmation.beginSheetModal(for: window) { response in
             guard response == .alertFirstButtonReturn else { return }

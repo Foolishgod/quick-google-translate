@@ -62,7 +62,7 @@ struct UninstallPlan {
             query[kSecUseAuthenticationContext as String] = context
             let status = SecItemCopyMatching(query as CFDictionary, nil)
             if status == errSecSuccess || status == errSecInteractionNotAllowed {
-                found.append(CleanupItem(kind: .keychain, title: "Google Cloud 密钥", detail: "仅删除此应用的 google-cloud-key；删除后无法从废纸篓恢复。", url: nil))
+                found.append(CleanupItem(kind: .keychain, title: "旧版连接密钥", detail: "仅删除此应用的 google-cloud-key；删除后无法从废纸篓恢复。", url: nil))
             }
         }
         return found
@@ -79,7 +79,7 @@ struct UninstallPlan {
             guard permits(item) else { results.append("未处理：\(item.title)（项目校验失败）"); continue }
             if item.kind == .keychain {
                 let status = deleteKey()
-                results.append(status == errSecSuccess || status == errSecItemNotFound ? "已删除：Google Cloud 密钥" : "未删除：Google Cloud 密钥（系统返回 \(status)）")
+                results.append(status == errSecSuccess || status == errSecItemNotFound ? "已删除：旧版连接密钥" : "未删除：旧版连接密钥（系统返回 \(status)）")
                 continue
             }
             guard let url = item.url else { continue }

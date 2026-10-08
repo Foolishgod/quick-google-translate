@@ -30,8 +30,28 @@ final class GlassCard: NSView {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class InputTextView: NSTextView {
+    var submit: (() -> Void)?
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.keyCode == 36 && event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command {
+            submit?(); return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextViewDelegate {
     let hotKey = HotKey()
+    let englishHotKey = HotKey()
+    var englishShortcut = Shortcut.englishSaved
+    var englishRecorder: Recorder?
+    var requestedEnglish = false
+    var activeEnglish = false
+    var manualInput = false
+    var submitButton: NSButton!
+    var advancedControls: [NSControl] = []
+    var settingsTabs: NSTabView?
+    var settingsTabButtons: [NSButton] = []
     var statusItem: NSStatusItem!
     var panel: TranslationPanel!
     let translationService = TranslationService()
@@ -77,6 +97,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let index = CommandLine.arguments.firstIndex(of: "--verify-foreground"), CommandLine.arguments.count > index + 1 {
             verifyForegroundPopup(URL(fileURLWithPath: CommandLine.arguments[index + 1])); return
         }
+        if CommandLine.arguments.contains("--verify-input") {
+            verifyManualInput(); NSApp.terminate(nil); return
+        }
         if CommandLine.arguments.contains("--verify-pinning") {
             verifyPinning(); NSApp.terminate(nil); return
         }
@@ -98,10 +121,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 try? layout.write(toFile: CommandLine.arguments[index + 1] + ".layout.txt", atomically: true, encoding: .utf8)
                 precondition(stack.arrangedSubviews.allSatisfy { !$0.hasAmbiguousLayout && root.bounds.contains(stack.convert($0.frame, to: root)) }, "Settings controls must fit within the window")
                 let defaultHelp = self.shortcutStatus!.stringValue
+                func verifySelectedTab() {
+                    let card = self.settingsTabs!.selectedTabViewItem!.view!
+                    let content = card.subviews.first as! NSStackView
+                    card.layoutSubtreeIfNeeded()
+                    precondition(content.arrangedSubviews.allSatisfy { !$0.hasAmbiguousLayout && card.bounds.contains(content.convert($0.frame, to: card)) }, "Settings page controls must fit without ambiguous layout")
+                }
+                for button in self.settingsTabButtons {
+                    self.changeSettingsTab(button)
+                    root.layoutSubtreeIfNeeded()
+                    verifySelectedTab()
+                    self.settings!.displayIfNeeded()
+                    precondition(stack.arrangedSubviews.allSatisfy { root.bounds.contains(stack.convert($0.frame, to: root)) }, "All settings pages keep the heading and footer inside the window")
+                    let frameLog = stack.arrangedSubviews.map { "\(type(of: $0)) \(stack.convert($0.frame, to: root))" }.joined(separator: "\n")
+                    try? frameLog.write(toFile: CommandLine.arguments[index + 1] + "-" + String(button.tag) + ".layout.txt", atomically: true, encoding: .utf8)
+                    if let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds) {
+                        root.cacheDisplay(in: root.bounds, to: bitmap)
+                        try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1] + "-" + String(button.tag) + ".png"))
+                    }
+                }
+                self.changeSettingsTab(self.settingsTabButtons[1])
                 self.shortcutStatus!.stringValue = HotKey.Failure.systemConflict.message + " 已保留原快捷键。"
                 root.layoutSubtreeIfNeeded()
                 precondition(stack.arrangedSubviews.allSatisfy { root.bounds.contains(stack.convert($0.frame, to: root)) }, "Conflict explanation must not push controls outside the window")
+                verifySelectedTab()
                 self.shortcutStatus!.stringValue = defaultHelp
+                self.changeSettingsTab(self.settingsTabButtons[0])
                 root.layoutSubtreeIfNeeded()
                 if let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds) {
                     root.cacheDisplay(in: root.bounds, to: bitmap)
@@ -151,9 +196,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self.sourceView.textStorage?.setAttributedString(SelectionFormatting.display(nil, text: self.sourceText, size: 15))
                 self.resultView.textStorage?.setAttributedString(SelectionFormatting.display(nil, text: self.translatedText, size: 19))
             }
-            message.stringValue = "新选区翻译 · 同文关闭 · Esc"
+            if CommandLine.arguments.contains("--preview-word") {
+                sourceText = "bank"; sourceView.string = sourceText
+                translatedText = "银行\n\n常见释义\n名词 · 银行；岸；岸边\n动词 · 存款；倾斜"
+                resultView.textStorage?.setAttributedString(SelectionFormatting.display(nil, text: translatedText, size: 19))
+            }
+            message.stringValue = "⌘ Return 翻译 · Esc 关闭"
             copyButton.isEnabled = true
-            panel.appearance = NSAppearance(named: .aqua)
+            panel.appearance = NSAppearance(named: CommandLine.arguments.contains("--preview-dark") ? .darkAqua : .aqua)
             panel.center()
             panel.orderFrontRegardless()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -206,7 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "character.bubble", accessibilityDescription: "划词谷歌翻译")
         let menu = NSMenu()
-        for (title, selector) in [("翻译剪贴板", #selector(translateClipboard)), ("设置…", #selector(showSettings)), ("检查更新…", #selector(checkForUpdates)), ("辅助功能权限…", #selector(openAccessibility)), ("退出", #selector(quit))] {
+        for (title, selector) in [("手动输入翻译…", #selector(openManualTranslation)), ("翻译剪贴板", #selector(translateClipboard)), ("设置…", #selector(showSettings)), ("检查更新…", #selector(checkForUpdates)), ("辅助功能权限…", #selector(openAccessibility)), ("退出", #selector(quit))] {
             let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
             item.target = self
             menu.addItem(item)
@@ -217,13 +267,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if UserDefaults.standard.string(forKey: "translationBackend") == "chrome" { ChromeBridge.shared.start() }
         createPanel()
         hotKey.action = { [weak self] in self?.handleShortcut() }
+        englishHotKey.action = { [weak self] in self?.handleShortcut(english: true) }
+        if englishShortcut.matches(shortcut) || !englishHotKey.register(englishShortcut) {
+            showSettings()
+            shortcutStatus?.stringValue = "中译英快捷键未启用，请选择与普通翻译不同且未被占用的组合。"
+        }
         if !hotKey.register(shortcut) {
             showSettings()
             shortcutStatus?.stringValue = hotKey.lastFailure?.message ?? "快捷键无法注册，请重新设置。"
             alert("快捷键被占用", hotKey.lastFailure?.message ?? "请在设置中录入另一个快捷键。")
         } else if !UserDefaults.standard.bool(forKey: "backgroundBrowser14") {
             UserDefaults.standard.set(true, forKey: "backgroundBrowser14")
-            UserDefaults.standard.set("browser", forKey: "translationBackend")
+            UserDefaults.standard.set("google", forKey: "translationBackend")
             showSettings()
         } else if !UserDefaults.standard.bool(forKey: "introduced") {
             UserDefaults.standard.set(true, forKey: "introduced")
@@ -237,7 +292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
         scroll.drawsBackground = false
-        let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 80))
+        let text = InputTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 80))
         text.isEditable = false
         text.isSelectable = true
         text.drawsBackground = false
@@ -291,7 +346,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         updatePinAppearance()
         let originalCard = GlassCard(frame: .zero)
         let translatedCard = GlassCard(frame: .zero)
-        let originalLabel = NSTextField(labelWithString: "原文")
+        let originalLabel = NSTextField(labelWithString: "原文 · 可输入")
         originalLabel.font = .systemFont(ofSize: 11, weight: .medium)
         originalLabel.textColor = .secondaryLabelColor
         let translatedLabel = NSTextField(labelWithString: "译文")
@@ -299,6 +354,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         translatedLabel.textColor = .systemBlue
         let (originalScroll, original) = textArea(font: .systemFont(ofSize: 15))
         sourceView = original
+        sourceView.isEditable = true
+        sourceView.isRichText = false
+        sourceView.isAutomaticQuoteSubstitutionEnabled = false
+        sourceView.isAutomaticDashSubstitutionEnabled = false
+        sourceView.isAutomaticTextReplacementEnabled = false
+        sourceView.isAutomaticSpellingCorrectionEnabled = false
+        sourceView.delegate = self
+        (sourceView as? InputTextView)?.submit = { [weak self] in self?.submitInput() }
         let (resultScroll, result) = textArea(font: .systemFont(ofSize: 19))
         resultView = result
         message = NSTextField(labelWithString: "新选区翻译 · 同文关闭 · Esc")
@@ -319,7 +382,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             copyButton.image = image
             copyButton.imagePosition = .imageLeading
         }
-        let footer = NSStackView(views: [spinner, message, retryButton, copyButton])
+        submitButton = NSButton(title: "翻译", target: self, action: #selector(submitInput))
+        submitButton.bezelStyle = .rounded
+        submitButton.toolTip = "翻译输入的内容 · ⌘ Return"
+        let footer = NSStackView(views: [spinner, message, retryButton, submitButton, copyButton])
         footer.distribution = .fill
         footer.spacing = 8
         for view in [title, languageLabel!, pinButton!, originalCard, translatedCard, footer] {
@@ -361,8 +427,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             footer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16)
         ])
     }
-    func handleShortcut() {
-        guard recorder?.recording != true else { return }
+    func handleShortcut(english: Bool = false) {
+        guard recorder?.recording != true, englishRecorder?.recording != true else { return }
+        requestedEnglish = english
+        if panel.isKeyWindow && manualInput && selectionReaderForVerification == nil {
+            invalidateSelectionReads()
+            activeEnglish = english
+            if sourceView.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { showManualInput(clear: false) }
+            else { submitInput() }
+            return
+        }
         selectionRevision += 1
         // Serialize reads so a second copy chord cannot overwrite another read's clipboard snapshot.
         // Only the most recent shortcut request may update or dismiss the window.
@@ -448,19 +522,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         check(!busy && reads.isEmpty, "Selection reader returns to idle")
         print("All selection-aware shortcut checks passed; no network, clipboard or permissions changed.")
     }
+    func verifyManualInput() {
+        createPanel()
+        var reads: [(String?) -> Void] = []
+        var requests: [(String, String, (Result<String, Error>) -> Void)] = []
+        selectionReaderForVerification = { reads.append($0) }
+        translatorForVerification = { text, target, complete in requests.append((text, target, complete)) }
+        func check(_ value: Bool, _ label: String) { precondition(value, label); print("PASS: " + label) }
+        func read(_ text: String?) { reads.removeFirst()(text) }
+        handleShortcut(); read(nil)
+        check(panel.isVisible && sourceView.isEditable && manualInput && panel.firstResponder === sourceView,
+            "No selection opens a focused editable input without submitting a request")
+        check(requests.isEmpty && !copyButton.isEnabled, "Empty input has no translation or copy result")
+        submitInput()
+        check(requests.isEmpty && sourceView.string.isEmpty, "Empty submit stays editable and does not call Google")
+        sourceView.string = "bank"
+        submitInput()
+        check(requests.count == 1 && requests[0].0 == "bank", "Manual input submits its current text")
+        sourceView.string = "light"
+        textDidChange(Notification(name: NSText.didChangeNotification, object: sourceView))
+        requests[0].2(.success("Old bank result"))
+        check(resultView.string.isEmpty && !copyButton.isEnabled, "Editing cancels a pending result and disables stale copying")
+        submitInput(); requests[1].2(.success("光\n\n常见释义\n名词 · 光；灯\n形容词 · 轻的"))
+        check(copyButton.isEnabled && resultView.string.contains("常见释义"), "Multiple word meanings remain visible in the result")
+        closePanel(); handleShortcut(english: true); read("")
+        check(activeEnglish && manualInput && requests.count == 2, "Empty Chinese-to-English shortcut opens the correct input direction")
+        sourceView.string = "你好，世界"
+        submitInput()
+        check(requests.last!.1 == "en" && activeEnglish, "Manual Chinese-to-English ignores the normal target setting")
+        requests.last!.2(.failure(TranslationError.message("fixture failure")))
+        retryTranslation()
+        check(requests.count == 4 && requests.last!.1 == "en", "Retry preserves Chinese-to-English direction")
+        closePanel(); handleShortcut(); read("Same selected text")
+        let normal = requests.last!
+        handleShortcut(english: true); read("Same selected text")
+        check(panel.isVisible && activeEnglish && requests.last!.1 == "en", "Same selected text with a different direction translates instead of closing")
+        normal.2(.success("Late normal result"))
+        check(resultView.string == "正在翻译…", "Switching directions ignores the previous late result")
+        handleShortcut(english: true); read("Same selected text")
+        check(!panel.isVisible, "Same selected text and direction close the panel")
+        handleShortcut(); handleShortcut(english: true)
+        read("Obsolete read")
+        check(reads.count == 1, "Two directional shortcuts still serialize selection reads")
+        read("最新中文")
+        check(activeEnglish && requests.last!.1 == "en", "Latest queued direction wins")
+        closePanel(); handleShortcut(); read(nil)
+        sourceView.string = "Typed input"
+        selectionReaderForVerification = nil
+        let count = requests.count
+        handleShortcut(english: true)
+        check(requests.count == count + 1 && requests.last!.0 == "Typed input" && requests.last!.1 == "en",
+            "Shortcut in the input panel uses the draft without external copy events")
+        sourceView.string = String(repeating: "中", count: 5001)
+        let countBefore = requests.count
+        submitInput()
+        check(requests.count == countBefore && sourceView.string.count == 5001, "Long input shows an error without losing the draft")
+        panel.cancelOperation(nil)
+        check(!panel.isVisible && !manualInput, "Escape closes manual input and resets focus mode")
+        let record = Recorder(); recorder = record
+        record.recording = true
+        handleShortcut(english: true)
+        check(!panel.isVisible, "Recording either shortcut prevents both translation actions")
+        record.recording = false
+        let old = shortcut
+        applyShortcut(englishShortcut)
+        check(shortcut.matches(old), "A duplicate direction shortcut is rejected without changing settings")
+        hotKey.unregister()
+        print("All manual input and directional shortcut checks passed; no network or saved settings changed.")
+    }
     func consumeSelection(_ raw: String, formatting: NSAttributedString? = nil) {
         let text: String
+        if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            showManualInput(clear: !panel.isVisible, english: requestedEnglish); return
+        }
         do { text = try TranslationRequest.normalize(raw) }
         catch { selectionFailed(error.localizedDescription); return }
-        if panel.isVisible && text.trimmingCharacters(in: .whitespacesAndNewlines) == sourceText.trimmingCharacters(in: .whitespacesAndNewlines) { closePanel() }
-        else { showTranslation(text, formatting: formatting) }
+        if panel.isVisible && activeEnglish == requestedEnglish && text.trimmingCharacters(in: .whitespacesAndNewlines) == sourceText.trimmingCharacters(in: .whitespacesAndNewlines) { closePanel() }
+        else { showTranslation(text, formatting: formatting, english: requestedEnglish) }
     }
     func selectionFailed(_ text: String) {
         if panel.isVisible {
             // Failure to read a selection is not evidence that it matches the current source.
             message.stringValue = "未读到有效新选区 · Esc 关闭"
             message.toolTip = text
-        } else { showMessage(text) }
+        } else { showManualInput(english: requestedEnglish); message.stringValue = "可手动输入 · ⌘ Return 翻译"; message.toolTip = text }
     }
     func finishSelectionRead() {
         busy = false
@@ -608,9 +753,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let focused = elementAttribute(application, kAXFocusedUIElementAttribute) else { return nil }
         if attribute(focused, kAXSubroleAttribute) as? String == "AXSecureTextField" { return "" }
         var element: AXUIElement? = focused
+        var confirmedEmpty = false
         for _ in 0..<12 {
             guard let current = element else { break }
-            if let text = attribute(current, kAXSelectedTextAttribute) as? String, !text.isEmpty { return text }
+            if let text = attribute(current, kAXSelectedTextAttribute) as? String {
+                if !text.isEmpty { return text }
+                confirmedEmpty = true
+            }
             // Chromium often exposes page selections through text markers on a web area.
             if let range = attribute(current, "AXSelectedTextMarkerRange") {
                 var text: CFTypeRef?
@@ -619,10 +768,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             element = elementAttribute(current, kAXParentAttribute)
         }
-        return nil
+        return confirmedEmpty ? "" : nil
     }
     func translateSelection() {
-        guard !busy, recorder?.recording != true else { return }
+        guard !busy, recorder?.recording != true, englishRecorder?.recording != true else { return }
         let revision = selectionRevision
         if let reader = selectionReaderForVerification {
             busy = true
@@ -631,17 +780,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 defer { self.finishSelectionRead() }
                 guard self.selectionRevision == revision else { return }
                 if let text { self.consumeSelection(text) }
-                else { self.selectionFailed("没有读到选区。请选择文字后重试。") }
+                else { self.showManualInput(clear: !self.panel.isVisible, english: self.requestedEnglish) }
             }
             return
         }
         guard AccessibilityPermission.check() else {
-            selectionFailed("本次运行尚未获得读取权限。若开关已打开，请退出本应用，移除旧的权限条目，用 + 添加新版后再打开。设置页可查看当前运行位置。")
-            openAccessibility()
+            showManualInput(clear: !panel.isVisible, english: requestedEnglish)
+            message.toolTip = "手动输入无需辅助功能权限；划词翻译请在设置中授权。"
             return
         }
         guard let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
-            selectionFailed("请回到 Chrome 或其他软件，选中文字后再按快捷键。")
+            showManualInput(clear: !panel.isVisible, english: requestedEnglish)
             return
         }
         let pid = front.processIdentifier
@@ -737,7 +886,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard self.selectionRevision == revision else { return }
             if let copied { self.consumeSelection(copied, formatting: formatting) }
             else if let plainSelection { self.consumeSelection(plainSelection) }
-            else { self.selectionFailed("没有读到选区。请确认辅助功能权限已开启，也可先按 ⌘C，再从菜单选择“翻译剪贴板”。") }
+            else { self.showManualInput(clear: !self.panel.isVisible, english: self.requestedEnglish) }
         }
     }
 
@@ -773,14 +922,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         retryButton.isHidden = true
         presentPanel()
     }
-    func showTranslation(_ raw: String, formatting: NSAttributedString? = nil) {
+    func showTranslation(_ raw: String, formatting: NSAttributedString? = nil, english: Bool = false) {
         let text: String
         do { text = try TranslationRequest.normalize(raw) }
         catch { showMessage(error.localizedDescription); return }
-        let target = UserDefaults.standard.string(forKey: "targetLanguage") ?? "zh-CN"
+        activeEnglish = english
+        manualInput = false
+        let target = english ? "en" : UserDefaults.standard.string(forKey: "targetLanguage") ?? "zh-CN"
         let chrome = ["chrome", "browser"].contains(UserDefaults.standard.string(forKey: "translationBackend") ?? "google")
-        let source = UserDefaults.standard.string(forKey: "chromeSourceLanguage") ?? "en"
-        let sourceName = chrome ? (languages.first(where: { $0.1 == source })?.0 ?? source) : "自动识别"
+        let source = english ? "zh-CN" : (chrome ? UserDefaults.standard.string(forKey: "chromeSourceLanguage") ?? "en" : "auto")
+        let sourceName = (chrome || english) ? (languages.first(where: { $0.1 == source })?.0 ?? source) : "自动识别"
         languageLabel.stringValue = sourceName + " → " + (languages.first(where: { $0.1 == target })?.0 ?? target)
         sourceText = text; translatedText = ""
         sourceFormatting = formatting
@@ -806,7 +957,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self.resultView.textStorage?.setAttributedString(SelectionFormatting.display(nil, text: translated, size: 19))
                 self.resultView.scrollRangeToVisible(NSRange(location: 0, length: 0))
                 self.copyButton.isEnabled = true
-                self.message.stringValue = "新选区翻译 · 同文关闭 · Esc"
+                self.message.stringValue = self.manualInput ? "⌘ Return 翻译 · Esc 关闭" : "新选区翻译 · 同文关闭 · Esc"
             case .failure(let error):
                 self.resultView.string = error.localizedDescription
                 self.retryButton.isHidden = false
@@ -816,10 +967,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let translator = translatorForVerification {
             translationService.cancel()
             translator(text, target, completion)
-        } else { translationService.translate(text: text, target: target, completion: completion) }
+        } else { translationService.translate(text: text, target: target, source: source, completion: completion) }
+    }
+    func showManualInput(clear: Bool = true, english: Bool? = nil) {
+        let changedDirection = english.map { $0 != activeEnglish } ?? false
+        if let english { activeEnglish = english }
+        manualInput = true
+        if clear || changedDirection {
+            generation += 1
+            translationService.cancel()
+            spinner.stopAnimation(nil)
+            translatedText = ""; sourceFormatting = nil
+            if clear { sourceText = ""; sourceView.string = "" }
+            resultView.string = "输入单词可查看常见释义；输入句子或段落可直接翻译。"
+            resultView.textColor = .secondaryLabelColor
+            copyButton.isEnabled = false
+            retryButton.isHidden = true
+        }
+        languageLabel.stringValue = activeEnglish ? "中文 → English" : "输入 → " + (languages.first { $0.1 == (UserDefaults.standard.string(forKey: "targetLanguage") ?? "zh-CN") }?.0 ?? "简体中文")
+        message.stringValue = "输入文字 · ⌘ Return 翻译 · Esc 关闭"
+        message.toolTip = nil
+        presentPanel()
+        panel.makeFirstResponder(sourceView)
+    }
+    @objc func openManualTranslation() {
+        invalidateSelectionReads()
+        showManualInput(clear: !panel.isVisible, english: false)
+    }
+    @objc func submitInput() {
+        guard !sourceView.hasMarkedText() else { message.stringValue = "请先确认输入法中的文字。"; return }
+        let input = sourceView.string
+        do { _ = try TranslationRequest.normalize(input) }
+        catch { message.stringValue = error.localizedDescription; return }
+        invalidateSelectionReads()
+        showTranslation(input, english: activeEnglish)
+        manualInput = true
+        panel.makeFirstResponder(sourceView)
+    }
+    func textDidChange(_ notification: Notification) {
+        guard notification.object as AnyObject? === sourceView else { return }
+        manualInput = true
+        generation += 1
+        translationService.cancel()
+        spinner.stopAnimation(nil)
+        translatedText = ""; sourceFormatting = nil
+        resultView.string = ""
+        copyButton.isEnabled = false
+        retryButton.isHidden = true
+        message.stringValue = "文字已修改 · ⌘ Return 翻译"
     }
     @objc func retryTranslation() {
-        if !sourceText.isEmpty { invalidateSelectionReads(); showTranslation(sourceText, formatting: sourceFormatting) }
+        if !sourceText.isEmpty { invalidateSelectionReads(); showTranslation(sourceText, formatting: sourceFormatting, english: activeEnglish) }
     }
     @objc func copyTranslation() {
         guard !translatedText.isEmpty else { return }
@@ -834,6 +1032,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         showTranslation(formatting?.string ?? clipboard.string(forType: .string) ?? "", formatting: formatting)
     }
     @objc func closePanel() {
+        manualInput = false
         panelPresented = false
         presentedSourcePID = nil
         endOutsideMonitoring()
@@ -850,102 +1049,132 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     @objc func showSettings() {
         if let settings { updatePermissionStatus(); NSApp.activate(ignoringOtherApps: true); settings.makeKeyAndOrderFront(nil); return }
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 760), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 590), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "划词谷歌翻译 · 设置"
         window.isReleasedWhenClosed = false
-        let title = NSTextField(labelWithString: "选中文字，一键翻译")
-        title.font = .boldSystemFont(ofSize: 19)
-        let intro = NSTextField(wrappingLabelWithString: "选新文字直接翻译，同文再按关闭。磨砂半透明浮窗显示原文和译文，默认免密钥。")
-        intro.preferredMaxLayoutWidth = 452
-        let shortcutTitle = NSTextField(labelWithString: "全局快捷键（点击后按下新组合）")
-        let record = Recorder(title: shortcut.label, target: self, action: #selector(startRecording))
-        record.bezelStyle = .rounded
-        record.changed = { [weak self] candidate in self?.applyShortcut(candidate) }
-        record.cancel = { [weak self, weak record] in
-            guard let self, let record else { return }
-            record.recording = false
-            record.title = self.shortcut.label
-            if !self.hotKey.register(self.shortcut) {
-                self.shortcutStatus?.stringValue = self.hotKey.lastFailure?.message ?? "快捷键无法注册，请重新设置。"
-            }
+        let title = NSTextField(labelWithString: "让翻译更顺手")
+        title.font = .systemFont(ofSize: 24, weight: .semibold)
+        func help(_ text: String) -> NSTextField {
+            let label = NSTextField(wrappingLabelWithString: text)
+            label.font = .systemFont(ofSize: 12)
+            label.textColor = .secondaryLabelColor
+            label.preferredMaxLayoutWidth = 468
+            return label
         }
-        self.recorder = record
-        let spaces = NSPopUpButton()
-        spaces.addItems(withTitles: ["选择空格组合…", "Control + 空格", "Option + 空格", "Command + 空格"])
-        spaces.target = self; spaces.action = #selector(spaceShortcutChosen(_:))
-        let shortcutRow = NSStackView(views: [record, spaces])
-        shortcutRow.spacing = 10
-        let shortcutHelp = NSTextField(wrappingLabelWithString: "支持修饰键 + 空格。⌘ 空格通常用于 Spotlight，⌃ 空格通常用于切换输入法；被占用时请先更改系统的对应快捷键。")
-        shortcutHelp.font = .systemFont(ofSize: 11)
-        shortcutHelp.textColor = .secondaryLabelColor
-        shortcutHelp.preferredMaxLayoutWidth = 452
-        shortcutStatus = shortcutHelp
-        let row = NSStackView()
-        row.addArrangedSubview(NSTextField(labelWithString: "目标语言"))
+        func row(_ name: String, _ control: NSView) -> NSStackView {
+            let label = NSTextField(labelWithString: name)
+            label.widthAnchor.constraint(equalToConstant: 125).isActive = true
+            let line = NSStackView(views: [label, control])
+            line.alignment = .centerY; line.spacing = 12
+            return line
+        }
+        let intro = help("划词即可翻译；没有选区时，也可以直接输入。")
+        let tabs = NSTabView()
+        tabs.tabViewType = .noTabsNoBorder
+        settingsTabs = tabs
+        let selectors = ["翻译", "快捷键", "权限与维护"].enumerated().map { index, name -> NSButton in
+            let button = NSButton(title: name, target: self, action: #selector(changeSettingsTab(_:)))
+            button.tag = index; button.bezelStyle = .rounded
+            button.setButtonType(.pushOnPushOff)
+            button.state = index == 0 ? .on : .off
+            return button
+        }
+        settingsTabButtons = selectors
+        let tabButtons = NSStackView(views: selectors)
+        tabButtons.spacing = 8; tabButtons.distribution = .fillEqually
+        func tab(_ name: String, _ views: [NSView]) {
+            let item = NSTabViewItem(identifier: name)
+            item.label = name
+            let card = GlassCard(frame: .zero)
+            let content = NSStackView(views: views)
+            content.orientation = .vertical; content.alignment = .leading; content.spacing = 16
+            content.translatesAutoresizingMaskIntoConstraints = false
+            card.addSubview(content)
+            NSLayoutConstraint.activate([
+                content.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 20),
+                content.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -20),
+                content.topAnchor.constraint(equalTo: card.topAnchor, constant: 24),
+                content.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -16)
+            ])
+            for view in views { view.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true }
+            item.view = card
+            tabs.addTabViewItem(item)
+        }
         let language = NSPopUpButton()
         language.addItems(withTitles: languages.map { $0.0 })
         language.selectItem(at: languages.firstIndex { $0.1 == (UserDefaults.standard.string(forKey: "targetLanguage") ?? "zh-CN") } ?? 0)
         language.target = self; language.action = #selector(languageChanged(_:))
-        row.addArrangedSubview(language)
         let engine = NSPopUpButton()
-        engine.addItems(withTitles: ["Google 普通翻译", "后台浏览器高级（Gemini）"])
+        engine.addItems(withTitles: ["Google 普通翻译", "Gemini 高级翻译（试用）"])
         engine.selectItem(at: UserDefaults.standard.string(forKey: "translationBackend") == "browser" ? 1 : 0)
         engine.target = self; engine.action = #selector(engineChanged(_:))
-        let engineRow = NSStackView(views: [NSTextField(labelWithString: "翻译方式"), engine])
         let source = NSPopUpButton()
         source.addItems(withTitles: languages.map { $0.0 })
         source.selectItem(at: languages.firstIndex { $0.1 == (UserDefaults.standard.string(forKey: "chromeSourceLanguage") ?? "en") } ?? 2)
         source.target = self; source.action = #selector(sourceChanged(_:))
-        let sourceRow = NSStackView(views: [NSTextField(labelWithString: "网页高级 · 原文语言"), source])
-        let connectChrome = NSButton(title: "后台浏览器与 Google 登录…", target: self, action: #selector(showBrowserSetup))
-        let status = NSTextField(labelWithString: "")
-        status.font = .systemFont(ofSize: 12, weight: .medium)
-        permissionLabel = status
-        let permissions = NSButton(title: "申请读取权限…", target: self, action: #selector(openAccessibility))
-        let locate = NSButton(title: "显示当前应用位置", target: self, action: #selector(revealCurrentApp))
-        let restart = NSButton(title: "重新启动应用", target: self, action: #selector(restartApp))
-        let permissionActions = NSStackView(views: [permissions, locate, restart])
-        permissionActions.spacing = 8
-        let path = NSTextField(labelWithString: Bundle.main.bundleURL.path)
-        path.font = .systemFont(ofSize: 11)
-        path.textColor = .secondaryLabelColor
-        path.lineBreakMode = .byTruncatingMiddle
-        path.isSelectable = true
-        path.toolTip = Bundle.main.bundleURL.path
+        let login = NSButton(title: "管理 Google 登录…", target: self, action: #selector(showBrowserSetup))
+        login.bezelStyle = .rounded
+        advancedControls = [source, login]
+        updateAdvancedControls()
+        tab("翻译", [help("普通模式自动识别语言，无需登录。中译英快捷键始终使用中文 → 英文。"),
+            row("目标语言", language), row("翻译方式", engine),
+            help("高级翻译需要 Google Chrome 和支持高级模式的账号。以下设置仅用于高级翻译；中译英会自动使用中文作为原文语言。"),
+            row("高级原文语言", source), login,
+            help("单词可显示 Google 提供的常见释义。需要能访问 Google；不保存翻译历史。")])
 
-        let help = NSTextField(wrappingLabelWithString: "授权时，请在系统的“辅助功能”或“Device Control and Data Access”页面添加当前应用。开关已开却无效：先退出应用、移除旧条目，再用 + 添加当前副本后重新打开。翻译需要能访问 Google；不保存翻译历史。")
-        help.font = .systemFont(ofSize: 12)
-        help.textColor = .secondaryLabelColor
-        help.preferredMaxLayoutWidth = 452
-        let cloud = NSButton(title: "Google Cloud 连接（可选）…", target: self, action: #selector(configureCloud))
+        let record = Recorder(title: shortcut.label, target: self, action: #selector(startRecording))
+        let englishRecord = Recorder(title: englishShortcut.label, target: self, action: #selector(startEnglishRecording))
+        for (isEnglish, control) in [(false, record), (true, englishRecord)] {
+            control.bezelStyle = .rounded
+            control.changed = { [weak self] candidate in self?.applyShortcut(candidate, english: isEnglish) }
+            control.cancel = { [weak self] in self?.cancelRecording(english: isEnglish) }
+        }
+        recorder = record; englishRecorder = englishRecord
+        let status = help("点击按钮后按下组合键。两组快捷键必须不同；⌘ 空格和 ⌃ 空格可能被系统占用。Esc 取消录入。")
+        shortcutStatus = status
+        tab("快捷键", [help("两组独立快捷键，分别用于日常阅读和中文写作。"),
+            row("普通翻译", record), help("翻译到你设置的目标语言。默认 Option + 空格。"),
+            row("中文 → 英文", englishRecord), help("默认 Option + Shift + 空格，可自定义。"), status,
+            help("选新文字再次按快捷键会换译文；相同文字与方向再次按会关闭。没有选区会进入手动输入，⌘ Return 翻译，Return 换行。")])
+
+        let permission = NSTextField(labelWithString: "")
+        permission.font = .systemFont(ofSize: 13, weight: .medium)
+        permissionLabel = permission
+        let authorize = NSButton(title: "开启读取权限…", target: self, action: #selector(openAccessibility))
+        authorize.bezelStyle = .rounded
+        let locate = NSButton(title: "显示应用位置", target: self, action: #selector(revealCurrentApp))
+        let restart = NSButton(title: "重新启动", target: self, action: #selector(restartApp))
+        locate.bezelStyle = .rounded; restart.bezelStyle = .rounded
+        let actions = NSStackView(views: [locate, restart]); actions.spacing = 12
+        let path = NSTextField(labelWithString: Bundle.main.bundleURL.path)
+        path.font = .systemFont(ofSize: 11); path.textColor = .secondaryLabelColor
+        path.lineBreakMode = .byTruncatingMiddle; path.isSelectable = true; path.toolTip = path.stringValue
         let maintenanceButton = NSButton(title: "软件更新与卸载…", target: self, action: #selector(showMaintenance))
-        let stack = NSStackView(views: [title, intro, shortcutTitle, shortcutRow, shortcutHelp, row, engineRow, sourceRow, connectChrome, status, permissionActions, path, cloud, maintenanceButton, help])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 12
+        maintenanceButton.bezelStyle = .rounded
+        tab("权限与维护", [permission, help("划词翻译需要辅助功能权限；手动输入不需要。"), authorize,
+            help("开关已打开但仍不能取词：退出应用，移除旧权限条目，再添加“应用程序”中的当前应用并重新启动。"),
+            actions, path, maintenanceButton])
+        let footer = help("磨砂浮窗支持置顶。按 Esc 关闭，未置顶时点击其他窗口自动收起。")
+        let stack = NSStackView(views: [title, intro, tabButtons, tabs, footer])
+        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 16
         stack.translatesAutoresizingMaskIntoConstraints = false
         window.contentView!.addSubview(stack)
-        for horizontalRow in [shortcutRow, row, engineRow, sourceRow, permissionActions] {
-            horizontalRow.distribution = .fill
-            horizontalRow.alignment = .centerY
-            horizontalRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        }
+        for view in [intro, tabButtons, tabs, footer] { view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 24),
             stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -24),
             stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 24),
-            path.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            shortcutHelp.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            intro.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            help.widthAnchor.constraint(equalTo: stack.widthAnchor)
+            stack.bottomAnchor.constraint(equalTo: window.contentView!.bottomAnchor, constant: -24),
+            tabs.heightAnchor.constraint(greaterThanOrEqualToConstant: 330)
         ])
-        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
-            if self?.recorder?.recording == true { self?.recorder?.cancel?() }
+        for notification in [NSWindow.willCloseNotification, NSWindow.didResignKeyNotification] {
+            NotificationCenter.default.addObserver(forName: notification, object: window, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                if self.recorder?.recording == true { self.cancelRecording(english: false) }
+                if self.englishRecorder?.recording == true { self.cancelRecording(english: true) }
+            }
         }
-        NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) { [weak self] _ in
-            if self?.recorder?.recording == true { self?.recorder?.cancel?() }
-        }
-        self.settings = window
+        settings = window
         updatePermissionStatus()
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard self?.settings?.isVisible == true || self?.chromeWindow?.isVisible == true || self?.browserWindow?.isVisible == true else { return }
@@ -954,6 +1183,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.center()
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+    }
+    @objc func changeSettingsTab(_ sender: NSButton) {
+        if recorder?.recording == true { cancelRecording(english: false) }
+        if englishRecorder?.recording == true { cancelRecording(english: true) }
+        settingsTabs?.selectTabViewItem(at: sender.tag)
+        for button in settingsTabButtons { button.state = button.tag == sender.tag ? .on : .off }
+    }
+    func updateAdvancedControls() {
+        let enabled = UserDefaults.standard.string(forKey: "translationBackend") == "browser"
+        advancedControls.forEach { $0.isEnabled = enabled }
     }
     func updatePermissionStatus() {
         browserStatus?.stringValue = BackgroundBrowser.shared.statusText
@@ -973,40 +1212,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         do { try process.run(); NSApp.terminate(nil) }
         catch { alert("请手动重新打开", "从菜单栏退出本应用，然后从应用程序文件夹重新打开。") }
     }
-    @objc func startRecording() {
-        if recorder?.recording == true { recorder?.cancel?(); return }
+    @objc func startRecording() { beginRecording(english: false) }
+    @objc func startEnglishRecording() { beginRecording(english: true) }
+    func beginRecording(english: Bool) {
+        let control = english ? englishRecorder : recorder
+        if control?.recording == true { cancelRecording(english: english); return }
+        if recorder?.recording == true { cancelRecording(english: false) }
+        if englishRecorder?.recording == true { cancelRecording(english: true) }
         invalidateSelectionReads()
-        hotKey.unregister()
-        recorder?.recording = true
-        recorder?.title = "请按快捷键 · Esc 取消"
-        settings?.makeFirstResponder(recorder)
+        (english ? englishHotKey : hotKey).unregister()
+        control?.recording = true
+        control?.title = "请按新组合 · Esc 取消"
+        settings?.makeFirstResponder(control)
     }
-    func applyShortcut(_ candidate: Shortcut) {
-        recorder?.recording = false
-        if hotKey.register(candidate) {
-            shortcut = candidate
-            candidate.save()
-            recorder?.title = candidate.label
-            shortcutStatus?.stringValue = "已设置为 \(candidate.label)。选新文字直接翻译，同文再按关闭。"
-        } else {
-            let failure = hotKey.lastFailure?.message ?? "快捷键无法注册。"
-            let restored = hotKey.register(shortcut)
-            recorder?.title = shortcut.label
-            shortcutStatus?.stringValue = failure + (restored ? " 已保留原快捷键。" : " 请重新选择快捷键。")
+    func cancelRecording(english: Bool) {
+        let control = english ? englishRecorder : recorder
+        let saved = english ? englishShortcut : shortcut
+        control?.recording = false; control?.title = saved.label
+        if !(english ? englishHotKey : hotKey).register(saved) {
+            shortcutStatus?.stringValue = "快捷键未能恢复，请重新选择一个未被占用的组合。"
         }
     }
-    @objc func spaceShortcutChosen(_ sender: NSPopUpButton) {
-        let index = sender.indexOfSelectedItem - 1
-        sender.selectItem(at: 0)
-        guard Shortcut.spaceChoices.indices.contains(index) else { return }
-        applyShortcut(Shortcut.spaceChoices[index])
+    func applyShortcut(_ candidate: Shortcut, english: Bool = false) {
+        let control = english ? englishRecorder : recorder
+        let key = english ? englishHotKey : hotKey
+        let old = english ? englishShortcut : shortcut
+        control?.recording = false
+        guard !candidate.matches(english ? shortcut : englishShortcut) else {
+            _ = key.register(old)
+            control?.title = old.label
+            shortcutStatus?.stringValue = "两组快捷键必须不同。已保留原组合。"; return
+        }
+        if key.register(candidate) {
+            if english { englishShortcut = candidate } else { shortcut = candidate }
+            candidate.save(prefix: english ? "englishShortcut" : "shortcut")
+            control?.title = candidate.label
+            shortcutStatus?.stringValue = "已设置" + (english ? "中译英" : "普通翻译") + "快捷键：" + candidate.label
+        } else {
+            let failure = key.lastFailure?.message ?? "快捷键无法注册。"
+            let restored = key.register(old)
+            control?.title = old.label
+            shortcutStatus?.stringValue = failure + (restored ? " 已保留原快捷键。" : " 请重新选择快捷键。")
+        }
     }
     @objc func languageChanged(_ sender: NSPopUpButton) {
         UserDefaults.standard.set(languages[sender.indexOfSelectedItem].1, forKey: "targetLanguage")
     }
     @objc func engineChanged(_ sender: NSPopUpButton) {
         UserDefaults.standard.set(sender.indexOfSelectedItem == 1 ? "browser" : "google", forKey: "translationBackend")
-        if sender.indexOfSelectedItem == 1 { showBrowserSetup() }
+        updateAdvancedControls()
     }
     @objc func sourceChanged(_ sender: NSPopUpButton) {
         UserDefaults.standard.set(languages[sender.indexOfSelectedItem].1, forKey: "chromeSourceLanguage")
@@ -1137,21 +1391,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             NSWorkspace.shared.open(directory)
         } catch { NSWorkspace.shared.open(source) }
-    }
-    @objc func configureCloud() {
-        let dialog = NSAlert()
-        dialog.messageText = "Google Cloud 连接（可选）"
-        dialog.informativeText = "默认无需设置。免密钥连接持续失败时，可以使用已启用 Cloud Translation Basic 的 API Key。密钥保存在 macOS 钥匙串，使用量由 Google Cloud 计费。清空并保存可恢复免密钥模式。"
-        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 340, height: 24))
-        field.placeholderString = "输入 Google Cloud API Key"
-        field.stringValue = APIKeyStore.read() ?? ""
-        dialog.accessoryView = field
-        dialog.addButton(withTitle: "保存")
-        dialog.addButton(withTitle: "取消")
-        if dialog.runModal() == .alertFirstButtonReturn,
-           !APIKeyStore.save(field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)) {
-            alert("未能保存", "macOS 钥匙串未允许保存密钥，请重试。")
-        }
     }
     func alert(_ title: String, _ text: String) {
         let alert = NSAlert(); alert.messageText = title; alert.informativeText = text; alert.runModal()
