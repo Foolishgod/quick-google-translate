@@ -5,6 +5,14 @@ func check(_ condition: Bool, _ label: String) {
     guard condition else { fputs("FAIL: " + label + "\n", stderr); exit(1) }
     print("PASS: " + label)
 }
+check(SelectionApplication.selectPID(reported: -1, windowOwners: [111, 222], matches: { $0 == 222 }) == 222, "Invalid Preview PID resolves to its own window process")
+check(SelectionApplication.selectPID(reported: 0, windowOwners: [-1, 0, 222], matches: { $0 == 222 }) == 222, "Window fallback rejects zero and negative process IDs")
+check(SelectionApplication.selectPID(reported: 333, windowOwners: [222], matches: { _ in false }) == 333, "Valid application PIDs keep the direct path")
+check(SelectionApplication.selectPID(reported: -1, windowOwners: [111], matches: { _ in false }) == nil, "Unrelated application windows cannot become a copy target")
+check(SelectionApplication.selectPID(reported: -1, windowOwners: [], matches: { _ in true }) == nil, "Missing windows never lead to events sent to an invalid process")
+var probes = 0
+_ = SelectionApplication.selectPID(reported: -1, windowOwners: [111, 111, 222], matches: { probes += 1; return $0 == 222 })
+check(probes == 2, "Multiple windows from one process are checked only once")
 let preview = "com.apple.Preview"
 check(AccessibleSelection.empty.needsCopy(bundleIdentifier: preview), "Preview empty accessibility selection falls back to copying")
 check(AccessibleSelection.unavailable.needsCopy(bundleIdentifier: preview), "Preview missing accessibility selection falls back to copying")
@@ -34,6 +42,9 @@ final class PageView: NSView {
 }
 let view = PageView(frame: NSRect(x: 0, y: 0, width: 520, height: 300))
 let pdf = PDFDocument(data: view.dataWithPDF(inside: view.bounds))!
+if let i = CommandLine.arguments.firstIndex(of: "--write-fixture"), CommandLine.arguments.count > i + 1 {
+    check(pdf.write(to: URL(fileURLWithPath: CommandLine.arguments[i + 1])), "Write only the generated PDF fixture for Preview runtime verification")
+}
 let page = pdf.page(at: 0)!
 let body = page.string!
 let range = (body as NSString).range(of: "bank")

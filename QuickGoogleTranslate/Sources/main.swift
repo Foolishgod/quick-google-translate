@@ -97,10 +97,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     // Controlled adapters are used only by the read-only native verification modes.
     var selectionReaderForVerification: ((@escaping (String?) -> Void) -> Void)?
     var translatorForVerification: ((String, String, @escaping (Result<String, Error>) -> Void) -> Void)?
+    var selectionTraceForVerification: ((String) -> Void)?
     var generation = 0
     let languages = [("简体中文", "zh-CN"), ("繁體中文", "zh-TW"), ("English", "en"), ("日本語", "ja"), ("한국어", "ko"), ("Français", "fr"), ("Deutsch", "de"), ("Español", "es")]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let index = CommandLine.arguments.firstIndex(of: "--verify-preview-pdf"), CommandLine.arguments.count > index + 2 {
+            verifyPreviewPDF(document: URL(fileURLWithPath: CommandLine.arguments[index + 1]), report: URL(fileURLWithPath: CommandLine.arguments[index + 2])); return
+        }
         if CommandLine.arguments.contains("--verify-auto-input") {
             verifyAutomaticInput(); return
         }
@@ -744,8 +748,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         }
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-                  app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
-            self?.handleApplicationActivation(app.processIdentifier)
+                  let source = SelectionApplication(app),
+                  source.pid != ProcessInfo.processInfo.processIdentifier else { return }
+            self?.handleApplicationActivation(source.pid)
         }
     }
     func endOutsideMonitoring() {
@@ -802,6 +807,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         check(!panel.isVisible && localClickMonitor == nil, "Escape still closes a pinned panel")
         other.orderOut(nil)
         print("All pinning checks passed; no preferences or permissions changed.")
+    }
+    func verifyPreviewPDF(document: URL, report: URL) {
+        let previous = NSWorkspace.shared.frontmostApplication
+        let clipboard = SelectionClipboardSnapshot(NSPasteboard.general)
+        var result: [String: Any] = [:]
+        var trace: [String] = []
+        selectionTraceForVerification = { trace.append($0) }
+        var finished = false
+        func finish(_ status: String) {
+            guard !finished else { return }; finished = true
+            result["status"] = status
+            result["trace"] = trace
+            result["manualInput"] = self.manualInput
+            result["busy"] = self.busy
+            result["footer"] = self.message.stringValue
+            result["clipboardRestored"] = SelectionClipboardSnapshot(NSPasteboard.general).items == clipboard.items
+            if let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]) { try? data.write(to: report) }
+            self.closePanel()
+            // Close only the caller-supplied fixture window, preserving user PDFs.
+            if let preview = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Preview").first,
+               let source = SelectionApplication(preview),
+               let windows = self.attribute(AXUIElementCreateApplication(source.pid), kAXWindowsAttribute) as? [AXUIElement] {
+                for window in windows {
+                    guard let path = self.attribute(window, kAXDocumentAttribute) as? String,
+                          URL(string: path)?.standardizedFileURL == document.standardizedFileURL,
+                          let close = self.elementAttribute(window, kAXCloseButtonAttribute) else { continue }
+                    AXUIElementPerformAction(close, kAXPressAction as CFString)
+                }
+            }
+            previous?.activate(options: .activateIgnoringOtherApps)
+            NSApp.terminate(nil)
+        }
+        createPanel()
+        translatorForVerification = { text, _, _ in
+            // Only counts and the known fixture marker are recorded, never PDF text.
+            result["characters"] = text.count
+            result["fixtureMatched"] = text.contains("Before PDF selection: bank")
+            DispatchQueue.main.async { finish("captured") }
+        }
+        let config = NSWorkspace.OpenConfiguration(); config.activates = true
+        NSWorkspace.shared.open([document], withApplicationAt: URL(fileURLWithPath: "/System/Applications/Preview.app"), configuration: config) { _, error in
+            Task { @MainActor in
+                guard error == nil else { finish("open-failed"); return }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard let source = SelectionApplication.frontmost, source.application.bundleIdentifier == "com.apple.Preview" else { finish("target-unresolved"); return }
+                result["reportedPID"] = source.application.processIdentifier
+                result["resolvedPID"] = source.pid
+                result["frontmostMatches"] = source.isFrontmost
+                result["accessibilityUsable"] = AccessibilityPermission.check(source: source)
+                result["postEventsAllowed"] = CGPreflightPostEventAccess()
+                guard AccessibilityPermission.check(source: source) else { finish("permission-denied"); return }
+                // The caller supplies the generated fixture, not a user document.
+                guard let events = CGEventSource(stateID: .privateState) else { finish("event-source-failed"); return }
+                for (key, down, flags) in [(CGKeyCode(55), true, CGEventFlags.maskCommand), (CGKeyCode(0), true, .maskCommand), (CGKeyCode(0), false, .maskCommand), (CGKeyCode(55), false, CGEventFlags())] {
+                    let event = CGEvent(keyboardEventSource: events, virtualKey: key, keyDown: down)
+                    event?.flags = flags; event?.postToPid(source.pid)
+                    try? await Task.sleep(nanoseconds: 30_000_000)
+                }
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                result["AXSelectionLengthAfterSelectAll"] = self.selectedText(in: AXUIElementCreateApplication(source.pid)).text?.count ?? 0
+                self.handleShortcut()
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { finish("no-selection-captured") }
     }
     func verifyForegroundPopup(_ helper: URL) {
         NSApp.setActivationPolicy(.accessory)
@@ -876,6 +945,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         return confirmedEmpty ? .empty : .unavailable
     }
     func translateSelection() {
+        selectionTraceForVerification?("selection-start")
         guard !busy, recorder?.recording != true, englishRecorder?.recording != true else { return }
         let revision = selectionRevision
         if let reader = selectionReaderForVerification {
@@ -889,16 +959,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             }
             return
         }
-        guard AccessibilityPermission.check() else {
+        guard let source = SelectionApplication.frontmost, source.pid != ProcessInfo.processInfo.processIdentifier else {
             showManualInput(clear: !panel.isVisible, english: requestedEnglish)
+            return
+        }
+        guard AccessibilityPermission.check(source: source) else {
+            showManualInput(clear: !panel.isVisible, english: requestedEnglish)
+            message.stringValue = "划词需要辅助功能权限 · 可手动输入"
             message.toolTip = "手动输入无需辅助功能权限；划词翻译请在设置中授权。"
             return
         }
-        guard let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
-            showManualInput(clear: !panel.isVisible, english: requestedEnglish)
-            return
-        }
-        let pid = front.processIdentifier
+        let front = source.application
+        let pid = source.pid
+        selectionTraceForVerification?("target-pid=\(pid)")
         let application = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(application, 0.25)
         busy = true
@@ -916,10 +989,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             for attempt in 0..<(isChromium ? 3 : 1) {
                 if attempt > 0 { try? await Task.sleep(nanoseconds: 150_000_000) }
                 guard self.selectionRevision == revision else { return }
-                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+                guard source.isFrontmost else {
                     self.selectionFailed("请回到选中文字的软件后重试。"); return
                 }
                 let selection = self.selectedText(in: application)
+                self.selectionTraceForVerification?("AX-selection-length=\(selection.text?.count ?? 0)")
                 if !selection.needsCopy(bundleIdentifier: front.bundleIdentifier, chromium: isChromium) {
                     self.consumeSelection(selection.text ?? ""); return
                 }
@@ -932,7 +1006,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
                 attempts += 1
             }
             guard self.selectionRevision == revision else { return }
-            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+            guard source.isFrontmost else {
                 self.selectionFailed("请回到选中文字的软件后重试。"); return
             }
             guard NSEvent.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty else {
@@ -941,11 +1015,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             let clipboard = NSPasteboard.general
             let snapshot = SelectionClipboardSnapshot(clipboard)
             let before = clipboard.changeCount
-            guard let source = CGEventSource(stateID: .privateState),
-                  let commandDown = CGEvent(keyboardEventSource: source, virtualKey: 55, keyDown: true),
-                  let down = CGEvent(keyboardEventSource: source, virtualKey: 8, keyDown: true),
-                  let up = CGEvent(keyboardEventSource: source, virtualKey: 8, keyDown: false),
-                  let commandUp = CGEvent(keyboardEventSource: source, virtualKey: 55, keyDown: false) else {
+            self.selectionTraceForVerification?("copy-post-start")
+            guard let eventSource = CGEventSource(stateID: .privateState),
+                  let commandDown = CGEvent(keyboardEventSource: eventSource, virtualKey: 55, keyDown: true),
+                  let down = CGEvent(keyboardEventSource: eventSource, virtualKey: 8, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: eventSource, virtualKey: 8, keyDown: false),
+                  let commandUp = CGEvent(keyboardEventSource: eventSource, virtualKey: 55, keyDown: false) else {
                 self.selectionFailed("无法读取选区，请复制文字后从菜单翻译剪贴板。"); return
             }
             // Post the full copy chord to the captured app, with no inherited hotkey flags.
@@ -955,12 +1030,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             try? await Task.sleep(nanoseconds: 25_000_000)
             up.postToPid(pid)
             commandUp.postToPid(pid)
+            self.selectionTraceForVerification?("copy-post-finished")
             var copied: String?
             var copiedCount: Int?
             var formatting: NSAttributedString?
             for _ in 0..<60 {
                 try? await Task.sleep(nanoseconds: 30_000_000)
-                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { break }
+                guard source.isFrontmost else { break }
                 if clipboard.changeCount != before {
                     // Remember a copy even if it contains no supported text, so
                     // image-only PDF selections do not replace the user's clipboard.
@@ -973,6 +1049,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
                 }
             }
             if let copiedCount { snapshot.restore(clipboard, ifUnchangedSince: copiedCount) }
+            self.selectionTraceForVerification?("copied-length=\(copied?.count ?? 0)")
             // Always release the copy chord and restore its clipboard before retiring a stale read.
             guard self.selectionRevision == revision else { return }
             if let copied { self.consumeSelection(copied, formatting: formatting) }
@@ -987,7 +1064,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
 
     func presentPanel() {
-        if !panelPresented { presentedSourcePID = NSWorkspace.shared.frontmostApplication?.processIdentifier }
+        if !panelPresented { presentedSourcePID = SelectionApplication.frontmost?.pid }
         panelPresented = true
         beginOutsideMonitoring()
         if !panel.isVisible {

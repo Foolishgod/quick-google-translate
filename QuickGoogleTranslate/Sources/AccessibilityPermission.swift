@@ -6,11 +6,11 @@ struct AccessibilityPermission {
         // A successful OS-authorized read can confirm access when the trust flag is stale.
         systemTrusted || externalProbe == .success
     }
-    static func check() -> Bool {
+    static func check(source: SelectionApplication? = nil) -> Bool {
         if AXIsProcessTrustedWithOptions(nil) { return true }
-        guard let front = NSWorkspace.shared.frontmostApplication,
-              front.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return false }
-        let target = AXUIElementCreateApplication(front.processIdentifier)
+        guard let source = source ?? SelectionApplication.frontmost,
+              source.pid != ProcessInfo.processInfo.processIdentifier else { return false }
+        let target = AXUIElementCreateApplication(source.pid)
         AXUIElementSetMessagingTimeout(target, 0.2)
         var focused: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(target, kAXFocusedUIElementAttribute as CFString, &focused)
