@@ -853,26 +853,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         guard let value = attribute(element, name), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
         return unsafeBitCast(value, to: AXUIElement.self)
     }
-    func selectedText(in application: AXUIElement) -> String? {
-        guard let focused = elementAttribute(application, kAXFocusedUIElementAttribute) else { return nil }
-        if attribute(focused, kAXSubroleAttribute) as? String == "AXSecureTextField" { return "" }
+    func selectedText(in application: AXUIElement) -> AccessibleSelection {
+        guard let focused = elementAttribute(application, kAXFocusedUIElementAttribute) else { return .unavailable }
+        if attribute(focused, kAXSubroleAttribute) as? String == "AXSecureTextField" { return .protectedInput }
         var element: AXUIElement? = focused
         var confirmedEmpty = false
         for _ in 0..<12 {
             guard let current = element else { break }
+            if attribute(current, kAXSubroleAttribute) as? String == "AXSecureTextField" { return .protectedInput }
             if let text = attribute(current, kAXSelectedTextAttribute) as? String {
-                if !text.isEmpty { return text }
+                if !text.isEmpty { return .text(text) }
                 confirmedEmpty = true
             }
             // Chromium often exposes page selections through text markers on a web area.
             if let range = attribute(current, "AXSelectedTextMarkerRange") {
                 var text: CFTypeRef?
                 if AXUIElementCopyParameterizedAttributeValue(current, "AXStringForTextMarkerRange" as CFString, range, &text) == .success,
-                   let value = text as? String, !value.isEmpty { return value }
+                   let value = text as? String, !value.isEmpty { return .text(value) }
             }
             element = elementAttribute(current, kAXParentAttribute)
         }
-        return confirmedEmpty ? "" : nil
+        return confirmedEmpty ? .empty : .unavailable
     }
     func translateSelection() {
         guard !busy, recorder?.recording != true, englishRecorder?.recording != true else { return }
@@ -918,14 +919,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
                 guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
                     self.selectionFailed("请回到选中文字的软件后重试。"); return
                 }
-                if let text = self.selectedText(in: application) {
-                    if text.isEmpty { self.consumeSelection(text); return }
-                    plainSelection = text
-                    // Chromium text markers can flatten list boundaries. Prefer its
-                    // copied HTML/RTF, with AX text retained if copying is unavailable.
-                    if !isChromium && !text.contains("\n") { self.consumeSelection(text); return }
-                    break
+                let selection = self.selectedText(in: application)
+                if !selection.needsCopy(bundleIdentifier: front.bundleIdentifier, chromium: isChromium) {
+                    self.consumeSelection(selection.text ?? ""); return
                 }
+                if let text = selection.text { plainSelection = text; break }
             }
             var attempts = 0
             while !NSEvent.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty && attempts < 120 {
@@ -941,11 +939,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
                 self.selectionFailed("请松开快捷键后重试。"); return
             }
             let clipboard = NSPasteboard.general
-            let snapshot: [[NSPasteboard.PasteboardType: Data]] = (clipboard.pasteboardItems ?? []).map { item in
-                var contents: [NSPasteboard.PasteboardType: Data] = [:]
-                for type in item.types { if let data = item.data(forType: type) { contents[type] = data } }
-                return contents
-            }
+            let snapshot = SelectionClipboardSnapshot(clipboard)
             let before = clipboard.changeCount
             guard let source = CGEventSource(stateID: .privateState),
                   let commandDown = CGEvent(keyboardEventSource: source, virtualKey: 55, keyDown: true),
@@ -968,29 +962,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
                 try? await Task.sleep(nanoseconds: 30_000_000)
                 guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { break }
                 if clipboard.changeCount != before {
-                    // Chrome can publish clipboard formats in stages.
-                    if let value = clipboard.string(forType: .string), !value.isEmpty {
-                        copied = value; copiedCount = clipboard.changeCount
-                        formatting = SelectionFormatting.fromClipboard(clipboard)
-                        if let formatting, !formatting.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { copied = formatting.string }
+                    // Remember a copy even if it contains no supported text, so
+                    // image-only PDF selections do not replace the user's clipboard.
+                    copiedCount = clipboard.changeCount
+                    if let selection = CapturedClipboardSelection.read(clipboard) {
+                        copied = selection.text
+                        formatting = selection.formatting
                         break
                     }
                 }
             }
-            if let copiedCount, clipboard.changeCount == copiedCount {
-                clipboard.clearContents()
-                let items = snapshot.map { contents -> NSPasteboardItem in
-                    let item = NSPasteboardItem()
-                    for (type, data) in contents { item.setData(data, forType: type) }
-                    return item
-                }
-                if !items.isEmpty { clipboard.writeObjects(items) }
-            }
+            if let copiedCount { snapshot.restore(clipboard, ifUnchangedSince: copiedCount) }
             // Always release the copy chord and restore its clipboard before retiring a stale read.
             guard self.selectionRevision == revision else { return }
             if let copied { self.consumeSelection(copied, formatting: formatting) }
             else if let plainSelection { self.consumeSelection(plainSelection) }
-            else { self.showManualInput(clear: !self.panel.isVisible, english: self.requestedEnglish) }
+            else {
+                self.showManualInput(clear: !self.panel.isVisible, english: self.requestedEnglish)
+                if front.bundleIdentifier == "com.apple.Preview" {
+                    self.message.toolTip = "未读取到 PDF 选区。请使用 Preview 的文字选择工具选中文字；扫描件或图片需要先识别文字。也可复制文字后从菜单翻译剪贴板。"
+                }
+            }
         }
     }
 

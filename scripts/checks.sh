@@ -4,7 +4,7 @@ cd "${0:A:h:h}"
 MODULE="QuickGoogleTranslate"
 python3 "$MODULE/Tests/Publication/test-publish.py"
 mkdir -p "$MODULE/.build/module-cache" QuickGoogleTranslateUninstaller/.build/module-cache
-COMMON=("$MODULE/Sources/TranslationLayout.swift" "$MODULE/Sources/TranslationService.swift" "$MODULE/Sources/ChromeBridge.swift" "$MODULE/Sources/BackgroundBrowser.swift")
+COMMON=("$MODULE/Sources/SelectionCapture.swift" "$MODULE/Sources/TranslationLayout.swift" "$MODULE/Sources/TranslationService.swift" "$MODULE/Sources/ChromeBridge.swift" "$MODULE/Sources/BackgroundBrowser.swift")
 FRAMEWORKS=(-framework AppKit -framework WebKit -framework ApplicationServices -framework Security -framework Network)
 swiftc -swift-version 5 -O -module-cache-path "$MODULE/.build/module-cache" "${COMMON[@]}" "$MODULE/Sources/AccessibilityPermission.swift" "$MODULE/Tests/main.swift" "${FRAMEWORKS[@]}" -o "$MODULE/.build/source-core-checks"
 swiftc -swift-version 5 -O -module-cache-path "$MODULE/.build/module-cache" "${COMMON[@]}" "$MODULE/Tests/Translation/main.swift" "${FRAMEWORKS[@]}" -o "$MODULE/.build/source-translation-checks"
@@ -13,6 +13,8 @@ swiftc -swift-version 5 -O -module-cache-path "$MODULE/.build/module-cache" "${C
 if [[ "${1:-}" == "--native" || "${1:-}" == "--chrome" ]]; then
     swiftc -swift-version 5 -O -module-cache-path "$MODULE/.build/module-cache" "${COMMON[@]}" "$MODULE/Tests/Formatting/main.swift" "${FRAMEWORKS[@]}" -o "$MODULE/.build/source-formatting-checks"
     "$MODULE/.build/source-formatting-checks"
+    swiftc -swift-version 5 -O -module-cache-path "$MODULE/.build/module-cache" "${COMMON[@]}" "$MODULE/Tests/PDFSelection/main.swift" "${FRAMEWORKS[@]}" -framework PDFKit -o "$MODULE/.build/source-pdf-selection-checks"
+    "$MODULE/.build/source-pdf-selection-checks"
 fi
 swiftc -swift-version 5 -O -module-cache-path QuickGoogleTranslateUninstaller/.build/module-cache QuickGoogleTranslateUninstaller/Sources/UninstallPlan.swift QuickGoogleTranslateUninstaller/Tests/main.swift -framework AppKit -framework Security -o QuickGoogleTranslateUninstaller/.build/source-uninstall-checks
 QuickGoogleTranslateUninstaller/.build/source-uninstall-checks
