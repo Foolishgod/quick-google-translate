@@ -27,6 +27,8 @@ fi
 if [[ "${1:-}" == "--native" ]]; then
     command -v node >/dev/null 2>&1 || { print 'Native browser fixtures require Node.js and npm ci.'; exit 1; }
     node -e 'require("ws")'
+    swiftc -swift-version 5 -O -module-cache-path "$MODULE/.build/module-cache" "$MODULE/Sources/ReadAloud.swift" "$MODULE/Tests/Speech/main.swift" -framework AVFoundation -framework NaturalLanguage -o "$MODULE/.build/source-speech-checks"
+    "$MODULE/.build/source-speech-checks" --render
     swiftc -swift-version 5 -O -module-cache-path "$MODULE/.build/module-cache" "$MODULE/Sources/KeyboardShortcut.swift" "$MODULE/Tests/Shortcuts/main.swift" -framework AppKit -framework Carbon -o "$MODULE/.build/source-shortcut-checks"
     "$MODULE/.build/source-shortcut-checks"
     python3 "$MODULE/Tests/Signing/verify-identities.py"
@@ -60,6 +62,7 @@ PY
         "$APP_EXECUTABLE" --verify-selection
         "$APP_EXECUTABLE" --verify-input
         "$APP_EXECUTABLE" --verify-auto-input
+        "$APP_EXECUTABLE" --verify-speech-ui
     else
         print 'Build the application first to also run foreground popup checks.'
     fi

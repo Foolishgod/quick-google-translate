@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Carbon
 import ApplicationServices
 
@@ -65,6 +66,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     var sourceView: NSTextView!
     var resultView: NSTextView!
     var copyButton: NSButton!
+    var readAloud = ReadAloudController()
+    var sourceSpeechButton: NSButton!
+    var translationSpeechButton: NSButton!
+    var sourceSpeechLanguage: String?
+    var translationSpeechLanguage: String?
     var retryButton: NSButton!
     var spinner: NSProgressIndicator!
     var sourceText = ""
@@ -104,6 +110,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let index = CommandLine.arguments.firstIndex(of: "--verify-preview-pdf"), CommandLine.arguments.count > index + 2 {
             verifyPreviewPDF(document: URL(fileURLWithPath: CommandLine.arguments[index + 1]), report: URL(fileURLWithPath: CommandLine.arguments[index + 2])); return
+        }
+        if CommandLine.arguments.contains("--verify-speech-ui") {
+            verifySpeechUI(); NSApp.terminate(nil); return
         }
         if CommandLine.arguments.contains("--verify-auto-input") {
             verifyAutomaticInput(); return
@@ -217,6 +226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             }
             message.stringValue = "输入后自动翻译 · Esc 关闭"
             copyButton.isEnabled = true
+            updateSpeechButtons()
             panel.appearance = NSAppearance(named: CommandLine.arguments.contains("--preview-dark") ? .darkAqua : .aqua)
             panel.center()
             panel.orderFrontRegardless()
@@ -366,6 +376,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         let translatedLabel = NSTextField(labelWithString: "译文")
         translatedLabel.font = .systemFont(ofSize: 11, weight: .semibold)
         translatedLabel.textColor = .systemBlue
+        sourceSpeechButton = NSButton(title: "朗读", target: self, action: #selector(readSource))
+        translationSpeechButton = NSButton(title: "朗读", target: self, action: #selector(readTranslation))
+        for button in [sourceSpeechButton!, translationSpeechButton!] {
+            button.bezelStyle = .rounded; button.controlSize = .small
+            button.isEnabled = false
+        }
+        readAloud.onChange = { [weak self] in self?.updateSpeechButtons() }
         let (originalScroll, original) = textArea(font: .systemFont(ofSize: 15))
         sourceView = original
         sourceView.isEditable = true
@@ -376,7 +393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         sourceView.isAutomaticSpellingCorrectionEnabled = false
         sourceView.delegate = self
         (sourceView as? InputTextView)?.submit = { [weak self] in self?.submitInput() }
-        (sourceView as? InputTextView)?.compositionEnded = { [weak self] in self?.scheduleAutomaticTranslation() }
+        (sourceView as? InputTextView)?.compositionEnded = { [weak self] in self?.updateSpeechButtons(); self?.scheduleAutomaticTranslation() }
         let (resultScroll, result) = textArea(font: .systemFont(ofSize: 19))
         resultView = result
         message = NSTextField(labelWithString: "新选区翻译 · 同文关闭 · Esc")
@@ -407,15 +424,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
-        for (card, label, scroll) in [(originalCard, originalLabel, originalScroll), (translatedCard, translatedLabel, resultScroll)] {
+        for (card, label, scroll, speech) in [(originalCard, originalLabel, originalScroll, sourceSpeechButton!), (translatedCard, translatedLabel, resultScroll, translationSpeechButton!)] {
+            speech.translatesAutoresizingMaskIntoConstraints = false
             label.translatesAutoresizingMaskIntoConstraints = false
             scroll.translatesAutoresizingMaskIntoConstraints = false
             card.addSubview(label)
             card.addSubview(scroll)
+            card.addSubview(speech)
             NSLayoutConstraint.activate([
                 label.topAnchor.constraint(equalTo: card.topAnchor, constant: 12),
                 label.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
-                scroll.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 5),
+                label.trailingAnchor.constraint(lessThanOrEqualTo: speech.leadingAnchor, constant: -8),
+                speech.topAnchor.constraint(equalTo: card.topAnchor, constant: 7),
+                speech.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -10),
+                scroll.topAnchor.constraint(equalTo: speech.bottomAnchor, constant: 5),
                 scroll.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 12),
                 scroll.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
                 scroll.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -10)
@@ -441,6 +463,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             footer.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
             footer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16)
         ])
+    }
+    func updateSpeechButtons() {
+        guard sourceSpeechButton != nil, translationSpeechButton != nil else { return }
+        for (button, section, name, available) in [
+            (sourceSpeechButton!, SpeechSection.source, "原文", !(sourceView?.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) && sourceView?.hasMarkedText() != true),
+            (translationSpeechButton!, SpeechSection.translation, "译文", !translatedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        ] {
+            let active = readAloud.section == section
+            button.title = active ? "停止" : "朗读"
+            button.image = NSImage(systemSymbolName: active ? "stop.fill" : "speaker.wave.2", accessibilityDescription: nil)
+            button.imagePosition = .imageLeading
+            button.contentTintColor = active ? .systemBlue : nil
+            button.isEnabled = active || available
+            button.toolTip = (active ? "停止朗读" : "朗读") + name
+            button.setAccessibilityLabel(button.toolTip!)
+        }
+    }
+    @objc func readSource() {
+        guard !sourceView.hasMarkedText() else { message.stringValue = "请先确认输入法中的文字。"; return }
+        do { try readAloud.toggle(.source, text: sourceView.string, language: sourceSpeechLanguage) }
+        catch { message.stringValue = error.localizedDescription }
+    }
+    @objc func readTranslation() {
+        // Use the successful result, never the loading/error/hint text in the view.
+        do { try readAloud.toggle(.translation, text: translatedText, language: translationSpeechLanguage) }
+        catch { message.stringValue = error.localizedDescription }
     }
     func handleShortcut(english: Bool = false) {
         guard recorder?.recording != true, englishRecorder?.recording != true else { return }
@@ -537,6 +585,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         check(!panel.isVisible, "Window close still dismisses")
         check(!busy && reads.isEmpty, "Selection reader returns to idle")
         print("All selection-aware shortcut checks passed; no network, clipboard or permissions changed.")
+    }
+    func verifySpeechUI() {
+        final class Engine: SpeechSynthesizing {
+            var delegate: AVSpeechSynthesizerDelegate?
+            var utterances: [AVSpeechUtterance] = []
+            var stops = 0
+            func speak(_ utterance: AVSpeechUtterance) { utterances.append(utterance) }
+            func stopSpeaking(at boundary: AVSpeechBoundary) -> Bool { stops += 1; return true }
+        }
+        let engine = Engine()
+        readAloud = ReadAloudController(engine: engine)
+        createPanel()
+        func check(_ value: Bool, _ label: String) { precondition(value, label); print("PASS: " + label) }
+        var complete: ((Result<String, Error>) -> Void)?
+        translatorForVerification = { _, _, callback in complete = callback }
+        showManualInput()
+        check(!sourceSpeechButton.isEnabled && !translationSpeechButton.isEnabled, "Empty input and hints cannot be read aloud")
+        showTranslation("你好，世界", english: true)
+        check(sourceSpeechButton.isEnabled && !translationSpeechButton.isEnabled, "Source can be read while the translation is loading")
+        sourceSpeechButton.performClick(nil)
+        check(engine.utterances.count == 1 && readAloud.section == .source && sourceSpeechButton.title == "停止", "Source button starts speech and becomes Stop")
+        sourceSpeechButton.performClick(nil)
+        check(engine.stops == 1 && readAloud.section == nil && sourceSpeechButton.title == "朗读", "Clicking the same button stops speech")
+        complete?(.success("Hello, world."))
+        check(translationSpeechButton.isEnabled, "Only a successful result enables translation speech")
+        sourceSpeechButton.performClick(nil)
+        translationSpeechButton.performClick(nil)
+        check(engine.stops == 2 && readAloud.section == .translation && engine.utterances.last!.speechString == "Hello, world.", "Switching sections replaces the old speech instead of queueing it")
+        check(engine.utterances.last!.voice!.language.hasPrefix("en"), "Chinese-to-English result uses an English voice")
+        sourceView.string = "新文字"
+        textDidChange(Notification(name: NSText.didChangeNotification, object: sourceView))
+        check(readAloud.section == nil && !translationSpeechButton.isEnabled, "Editing stops speech and disables the old translation")
+        sourceSpeechButton.performClick(nil)
+        closePanel()
+        check(readAloud.section == nil && !panel.isVisible, "Closing the panel stops speech")
+        showTranslation("new text")
+        complete?(.failure(TranslationError.message("fixture error")))
+        check(!translationSpeechButton.isEnabled, "Connection errors cannot be read as translations")
+        sourceSpeechButton.performClick(nil)
+        showTranslation("replacement text")
+        check(readAloud.section == nil, "New selections stop the previous speech")
+        sourceSpeechButton.performClick(nil)
+        showManualInput(english: true)
+        check(readAloud.section == nil, "Changing input direction stops speech")
+        showManualInput(english: false)
+        sourceView.string = "This is a sentence."
+        textDidChange(Notification(name: NSText.didChangeNotification, object: sourceView))
+        sourceSpeechButton.performClick(nil)
+        submitInput()
+        check(readAloud.section == .source, "Automatic translation of unchanged input does not interrupt source speech")
+        closePanel()
+        for size in [NSSize(width: 400, height: 360), NSSize(width: 520, height: 520)] {
+            panel.setContentSize(size)
+            panel.contentView!.layoutSubtreeIfNeeded()
+            for button in [sourceSpeechButton!, translationSpeechButton!] {
+                check(button.superview!.bounds.contains(button.frame) && !button.hasAmbiguousLayout, "Speech button fits the translation card at \(Int(size.width)) pixels")
+            }
+        }
+        closePanel()
+        print("All speech UI checks passed; no audible speech or preferences changed.")
     }
     func verifyAutomaticInput() {
         createPanel()
@@ -1081,6 +1189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         panel.orderFrontRegardless()
     }
     func showMessage(_ text: String) {
+        readAloud.stop()
         cancelAutomaticTranslation()
         generation += 1
         translationService.cancel()
@@ -1089,6 +1198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         sourceFormatting = nil
         sourceView.string = ""
         resultView.string = text
+        updateSpeechButtons()
         resultView.textColor = .labelColor
         message.stringValue = "选中文字后按 " + shortcut.label
         message.toolTip = nil
@@ -1101,6 +1211,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         let text: String
         do { text = try TranslationRequest.normalize(raw) }
         catch { showMessage(error.localizedDescription); return }
+        if preserveInput && english == activeEnglish { readAloud.stopUnlessReadingSource(raw) }
+        else { readAloud.stop() }
         activeEnglish = english
         manualInput = preserveInput
         let target = english ? "en" : UserDefaults.standard.string(forKey: "targetLanguage") ?? "zh-CN"
@@ -1109,12 +1221,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         let sourceName = (chrome || english) ? (languages.first(where: { $0.1 == source })?.0 ?? source) : "自动识别"
         languageLabel.stringValue = sourceName + " → " + (languages.first(where: { $0.1 == target })?.0 ?? target)
         sourceText = text; translatedText = ""
+        sourceSpeechLanguage = source == "auto" ? nil : source
+        translationSpeechLanguage = target
         sourceFormatting = formatting
         message.toolTip = nil
         if !preserveInput {
             sourceView.textStorage?.setAttributedString(SelectionFormatting.display(formatting, text: text, size: 15))
             sourceView.scrollRangeToVisible(NSRange(location: 0, length: 0))
         }
+        updateSpeechButtons()
         resultView.string = "正在翻译…"
         resultView.textColor = .secondaryLabelColor
         copyButton.isEnabled = false
@@ -1128,6 +1243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             guard let self, self.generation == requestGeneration else { return }
             self.spinner.stopAnimation(nil)
             self.resultView.textColor = .labelColor
+            defer { self.updateSpeechButtons() }
             switch result {
             case .success(let translated):
                 self.translatedText = translated
@@ -1147,10 +1263,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         } else { translationService.translate(text: text, target: target, source: source, completion: completion) }
     }
     func showManualInput(clear: Bool = true, english: Bool? = nil) {
+        readAloud.stop()
         cancelAutomaticTranslation()
         let changedDirection = english.map { $0 != activeEnglish } ?? false
         if let english { activeEnglish = english }
         manualInput = true
+        sourceSpeechLanguage = activeEnglish ? "zh-CN" : nil
         if clear || changedDirection {
             generation += 1
             translationService.cancel()
@@ -1162,6 +1280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             copyButton.isEnabled = false
             retryButton.isHidden = true
         }
+        updateSpeechButtons()
         languageLabel.stringValue = activeEnglish ? "中文 → English" : "输入 → " + (languages.first { $0.1 == (UserDefaults.standard.string(forKey: "targetLanguage") ?? "zh-CN") }?.0 ?? "简体中文")
         message.stringValue = "输入后自动翻译 · Esc 关闭"
         message.toolTip = nil
@@ -1185,6 +1304,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
     func textDidChange(_ notification: Notification) {
         guard notification.object as AnyObject? === sourceView else { return }
+        readAloud.stop()
+        sourceSpeechLanguage = activeEnglish ? "zh-CN" : nil
         manualInput = true
         generation += 1
         translationService.cancel()
@@ -1193,6 +1314,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         resultView.string = ""
         copyButton.isEnabled = false
         retryButton.isHidden = true
+        updateSpeechButtons()
         scheduleAutomaticTranslation()
     }
     func cancelAutomaticTranslation() {
@@ -1242,6 +1364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         showTranslation(formatting?.string ?? clipboard.string(forType: .string) ?? "", formatting: formatting)
     }
     @objc func closePanel() {
+        readAloud.stop()
         cancelAutomaticTranslation()
         manualInput = false
         panelPresented = false
@@ -1531,7 +1654,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             catch { alert("浏览器尚未退出", error.localizedDescription) }
         }
     }
-    func applicationWillTerminate(_ notification: Notification) { BackgroundBrowser.shared.terminateOwnedProcess() }
+    func applicationWillTerminate(_ notification: Notification) { readAloud.stop(); BackgroundBrowser.shared.terminateOwnedProcess() }
     @objc func checkForUpdates() {
         if maintenance == nil { maintenance = AppMaintenance() }
         do { try maintenance!.checkForUpdates() } catch { alert("暂时无法检查更新", error.localizedDescription) }
