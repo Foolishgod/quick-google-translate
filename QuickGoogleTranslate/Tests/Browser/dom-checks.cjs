@@ -9,7 +9,7 @@ const chrome=process.env.QGT_TEST_CHROME||'/Applications/Google Chrome.app/Conte
 const profile=fs.mkdtempSync(path.join(os.tmpdir(),'qgt-dom-test-'));
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const child=spawn(chrome,['--headless=new','--no-first-run','--no-default-browser-check','--disable-background-networking','--host-resolver-rules=MAP * ~NOTFOUND','--remote-debugging-port=0','--remote-debugging-address=127.0.0.1','--user-data-dir='+profile,'about:blank'],{stdio:'ignore'});
-const html=`<!doctype html><meta charset="utf-8"><button id="model">Classic</button><div id="menu" role="menu" hidden><button role="menuitem" id="advanced">Advanced Gemini</button></div><textarea></textarea><div id="output"></div><script>
+const html=`<!doctype html><meta charset="utf-8"><button id="model">Classic</button><div id="menu" role="menu" hidden><button role="menuitem" id="advanced">Advanced Gemini</button></div><textarea></textarea><div id="output"></div><div role="progressbar" aria-hidden="true" style="width:24px;height:24px"></div><div role="progressbar" style="width:0;height:0"></div><div style="opacity:0"><div role="progressbar" style="width:24px;height:24px"></div></div><script>
 window.fixtureInputs=[];let version=0;const input=document.querySelector('textarea'),output=document.querySelector('#output');
 document.querySelector('#model').onclick=()=>document.querySelector('#menu').hidden=false;
 document.querySelector('#advanced').onclick=()=>{document.querySelector('#model').innerText='Advanced';document.querySelector('#menu').hidden=true;};

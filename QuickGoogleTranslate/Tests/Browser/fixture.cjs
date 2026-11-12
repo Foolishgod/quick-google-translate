@@ -30,6 +30,7 @@ else {
           const input=JSON.parse(expression.slice(expression.lastIndexOf('\n)(')+3,-1));
           const text=input.text;trace.inputs.push(text);
           let value={text:'结果:'+text,model:'advanced'};
+          if(text==='not-ready')value={recover:true,reason:'clear-not-acknowledged'};
           if(text==='classic')value={text:'经典结果',model:'classic'};
           if(text==='login')value={error:'Google 需要登录或确认，请在设置中打开登录窗口处理。'};
           if(text==='recover'&&!invalidOnce){invalidOnce=true;value={recover:true};}

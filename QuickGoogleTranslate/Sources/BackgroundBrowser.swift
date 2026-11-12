@@ -209,7 +209,16 @@ final class BackgroundBrowser {
                         _ = try await client.call("Page.reload", sessionID: sessionID)
                         try await self.waitForNavigation(client, sessionID: sessionID, previous: previous)
                     } else if value?["recover"] as? Bool == true || evaluated["exceptionDetails"] != nil || value == nil {
-                        guard attempt == 0 else { throw TranslationError.message("Google 页面未能准备好新翻译，请打开登录窗口检查后重试。") }
+                        guard attempt == 0 else {
+                            let message: String
+                            switch value?["reason"] as? String {
+                            case "input-missing", "input-unavailable": message = "Google 翻译输入框尚未就绪，请稍后重试或打开登录窗口检查。"
+                            case "clear-not-acknowledged", "stale-result": message = "Google 页面尚未清空上一条内容，请稍后重试。"
+                            case "input-not-accepted": message = "Google 页面未接收本次原文，请重新打开登录窗口后重试。"
+                            default: message = "Google 页面未能准备好新翻译，请打开登录窗口检查后重试。"
+                            }
+                            throw TranslationError.message(message)
+                        }
                         try await self.discardPage(client)
                     } else { break }
                 }

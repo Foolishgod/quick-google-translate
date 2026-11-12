@@ -1,6 +1,15 @@
 async request => {
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const visible = el => el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
+  const visible = el => {
+    if (![...el.getClientRects()].some(rect => rect.width > 0 && rect.height > 0)) return false;
+    const ownStyle = getComputedStyle(el);
+    if (ownStyle.visibility === 'hidden' || ownStyle.visibility === 'collapse') return false;
+    for (let node = el; node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (style.display === 'none' || style.opacity === '0') return false;
+    }
+    return true;
+  };
   const advanced = /高级|進階|advanced/i;
   const classic = /经典|經典|classic|fast|快速/i;
   const control = () => [...document.querySelectorAll('button,[role="button"]')].find(el => visible(el) && !el.closest('[role="menu"]') && el.innerText.trim().length < 100 && (advanced.test(el.innerText) || classic.test(el.innerText)));
@@ -20,7 +29,10 @@ async request => {
     };
     return walk(root).replace(/\n[\t ]+\n/g, '\n\n').trim();
   };
-  const busy = () => [...document.querySelectorAll('[aria-busy="true"],[role="progressbar"]')].some(visible);
+  // Google keeps its closed progress components in the DOM with aria-hidden.
+  // Some still have a layout box, so geometry alone cannot establish activity.
+  const busy = () => [...document.querySelectorAll('[aria-busy="true"],[role="progressbar"]')]
+    .some(el => visible(el) && !el.closest('[aria-hidden="true"],[hidden]'));
   window.__qgtRequest = request.id;
   const current = () => {
     if (window.__qgtRequest !== request.id) throw new Error('请求已取消。');
@@ -36,9 +48,9 @@ async request => {
     }
     if (!button || button.disabled || button.getAttribute('aria-disabled') === 'true') throw new Error('网页没有可用的高级模型选项。请打开登录窗口检查账号、语言组合或 Google 提示。');
     const input = [...document.querySelectorAll('textarea')].find(el => visible(el) && !el.disabled && !el.readOnly);
-    if (!input) return {recover: true};
+    if (!input) return {recover: true, reason: 'input-missing'};
     const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-    if (!setter) return {recover: true};
+    if (!setter) return {recover: true, reason: 'input-unavailable'};
     const setText = text => {
       current();
       setter.call(input, text);
@@ -52,7 +64,7 @@ async request => {
       await wait(75);
       empty = input.value === '' && !result().trim() && !busy() ? empty + 1 : 0;
     }
-    if (empty < 2) return {recover: true};
+    if (empty < 2) return {recover: true, reason: 'clear-not-acknowledged'};
     if (!advanced.test(button.innerText)) {
       button.click();
       await wait(150);
@@ -64,13 +76,13 @@ async request => {
       if (!advanced.test(control()?.innerText || '')) return {reload: true};
     }
     current();
-    if (result().trim()) return {recover: true};
+    if (result().trim()) return {recover: true, reason: 'stale-result'};
     setText(request.text);
     let previous = '', stable = 0;
     for (let i = 0; i < 240; i++) {
       await wait(150);
       if (!advanced.test(control()?.innerText || '')) throw new Error('Google 未保持高级模式，本次不会采用经典模型。');
-      if (input.value.replace(/\r\n/g, '\n') !== request.text.replace(/\r\n/g, '\n')) return {recover: true};
+      if (input.value.replace(/\r\n/g, '\n') !== request.text.replace(/\r\n/g, '\n')) return {recover: true, reason: 'input-not-accepted'};
       const text = result();
       stable = text.trim() && text === previous && !busy() ? stable + 1 : 0;
       previous = text;

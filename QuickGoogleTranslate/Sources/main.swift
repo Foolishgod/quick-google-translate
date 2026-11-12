@@ -108,6 +108,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     let languages = [("简体中文", "zh-CN"), ("繁體中文", "zh-TW"), ("English", "en"), ("日本語", "ja"), ("한국어", "ko"), ("Français", "fr"), ("Deutsch", "de"), ("Español", "es")]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let index = CommandLine.arguments.firstIndex(of: "--verify-live-browser"), CommandLine.arguments.count > index + 1 {
+            verifyLiveBrowser(report: URL(fileURLWithPath: CommandLine.arguments[index + 1])); return
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--verify-preview-pdf"), CommandLine.arguments.count > index + 2 {
             verifyPreviewPDF(document: URL(fileURLWithPath: CommandLine.arguments[index + 1]), report: URL(fileURLWithPath: CommandLine.arguments[index + 2])); return
         }
@@ -916,6 +919,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         other.orderOut(nil)
         print("All pinning checks passed; no preferences or permissions changed.")
     }
+    func verifyLiveBrowser(report: URL) {
+        translationService.backendForVerification = "browser"
+        let samples = [("Hello, world.", "en", "zh-CN"), ("Hello, world.", "en", "zh-CN"),
+                       ("你好，世界。", "zh-CN", "en"), ("• First item: a grid tile.\n• Second item: click to reveal it.", "en", "zh-CN")]
+        var rows: [[String: Any]] = []
+        Task { @MainActor in
+            for (text, source, target) in samples {
+                let result: Result<String, Error> = await withCheckedContinuation { callback in
+                    self.translationService.translate(text: text, target: target, source: source) { callback.resume(returning: $0) }
+                }
+                switch result {
+                case .success(let output):
+                    rows.append(["source": source, "target": target, "text": text, "translation": output,
+                                 "targetID": BackgroundBrowser.shared.targetID ?? "", "success": !output.isEmpty])
+                case .failure(let error):
+                    rows.append(["source": source, "target": target, "error": error.localizedDescription, "success": false])
+                }
+                if rows.last?["success"] as? Bool != true { break }
+            }
+            let passed = rows.count == samples.count && rows.allSatisfy { $0["success"] as? Bool == true }
+            let reused = rows.count > 1 && (rows[0]["targetID"] as? String) == (rows[1]["targetID"] as? String)
+            let result: [String: Any] = ["passed": passed, "warmPageReused": reused, "samples": rows]
+            if let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]) { try? data.write(to: report) }
+            NSApp.terminate(nil)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 180) {
+            if !FileManager.default.fileExists(atPath: report.path) {
+                try? Data("{\"passed\":false,\"error\":\"live browser test timed out\"}".utf8).write(to: report)
+                NSApp.terminate(nil)
+            }
+        }
+    }
     func verifyPreviewPDF(document: URL, report: URL) {
         let previous = NSWorkspace.shared.frontmostApplication
         let clipboard = SelectionClipboardSnapshot(NSPasteboard.general)
@@ -1254,7 +1289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             case .failure(let error):
                 self.resultView.string = error.localizedDescription
                 self.retryButton.isHidden = false
-                self.message.stringValue = "连接失败"
+                self.message.stringValue = chrome ? "网页翻译未完成" : "翻译失败"
             }
         }
         if let translator = translatorForVerification {

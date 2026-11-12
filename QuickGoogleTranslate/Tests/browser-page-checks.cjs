@@ -2,10 +2,10 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const code = fs.readFileSync('QuickGoogleTranslate/BrowserTranslate.js', 'utf8');
-async function fixture({mode='Advanced', hasControl=true, disabled=false, hostname='translate.google.com', loseModel=false, busy=false, menu=true, noInput=false, stale=false, chunks=false, cancel=false, switchFails=false, ready=true, sameResult=false}={}) {
+async function fixture({mode='Advanced', hasControl=true, disabled=false, hostname='translate.google.com', loseModel=false, busy=false, menu=true, noInput=false, stale=false, chunks=false, cancel=false, switchFails=false, ready=true, sameResult=false, hiddenBusy=false, zeroBusy=false, transparentBusy=false}={}) {
   let clicked=false, reads=0, submitted=false, ticks=0, output='旧译文', modeAtSubmit;
   const pageWindow = {};
-  const visible={getClientRects:()=>[{}], closest:()=>null, getAttribute:()=>null};
+  const visible={getClientRects:()=>[{width:100,height:20}], closest:()=>null, getAttribute:()=>null};
   class TextArea {
     constructor(){this._value='上一段文字';Object.assign(this,visible)}
     get value(){return this._value}
@@ -26,10 +26,16 @@ async function fixture({mode='Advanced', hasControl=true, disabled=false, hostna
     if(selector.startsWith('[role="menuitem"'))return menu?[option]:[];
     if(selector==='textarea')return noInput?[]:[input];
     if(selector==='span.ryNqvb')return [segment];
-    if(selector.startsWith('[aria-busy'))return busy?[visible]:[];
+    if(selector.startsWith('[aria-busy')) {
+      if (busy) return [visible];
+      if (hiddenBusy) { const spinner={...visible}; spinner.closest=selector=>selector.includes('aria-hidden')?spinner:null; return [spinner]; }
+      if (zeroBusy) return [{...visible,getClientRects:()=>[{width:0,height:0}]}];
+      if (transparentBusy) return [{...visible,parentElement:{styleForTest:{visibility:'visible',opacity:'0'}}}];
+      return [];
+    }
     return [];
   }};
-  const context=vm.createContext({window:pageWindow,document,HTMLTextAreaElement:TextArea,InputEvent:class{constructor(type){this.type=type}},location:{hostname},getComputedStyle:()=>({visibility:'visible'}),setTimeout:fn=>setImmediate(()=>{
+  const context=vm.createContext({window:pageWindow,document,HTMLTextAreaElement:TextArea,InputEvent:class{constructor(type){this.type=type}},location:{hostname},getComputedStyle:el=>el.styleForTest||({visibility:'visible',opacity:'1'}),setTimeout:fn=>setImmediate(()=>{
     if(cancel)pageWindow.__qgtRequest=null;
     if(submitted){ticks++;if(loseModel)mode='Classic';output=sameResult?'旧译文':chunks&&ticks<8?'译文正在变化'+ticks:'你好，世界';}
     fn();
@@ -54,5 +60,9 @@ async function fixture({mode='Advanced', hasControl=true, disabled=false, hostna
     const {result}=await fixture(settings);assert.ok(result.error || result.recover);assert.equal(result.text,undefined);
   }
   console.log('PASS: reject unavailable/lost model, incomplete output, canceled requests and login prompts');
+  for(const [settings,label] of [[{hiddenBusy:true},'closed aria-hidden spinner'],[{zeroBusy:true},'zero-area spinner'],[{transparentBusy:true},'transparent ancestor spinner']]) {
+    const {result}=await fixture(settings);assert.equal(result.model,'advanced',label);assert.equal(result.text,'你好，世界');
+    console.log('PASS: ignore '+label+' while accepting a fresh advanced result');
+  }
   console.log('All reusable page fixtures passed.');
 })().catch(error=>{console.error(error);process.exitCode=1});

@@ -49,6 +49,9 @@ Task { @MainActor in
         try await browser.startBackground()
         if case .success = await translate("after login") {} else { fatalError("after login failed") }
         check(trace("created") == 1 && trace("navigated") == 1,"returning from login starts one fresh page")
+        if case .failure(let error) = await translate("not-ready") {
+            check(error.localizedDescription.contains("尚未清空"), "page-readiness failures explain the page state instead of reporting a transport disconnect")
+        } else { fatalError("Persistent page recovery was ignored") }
         try await browser.stop()
         check(browser.mode == .stopped && browser.process == nil && browser.pageSessionID == nil,"stop clears the owned browser and retained page")
         print("All reusable browser controller checks passed.");exit(0)
