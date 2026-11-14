@@ -921,6 +921,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
     func verifyLiveBrowser(report: URL) {
         translationService.backendForVerification = "browser"
+        BackgroundBrowser.shared.legacyLaunchForVerification = CommandLine.arguments.contains("--verify-memory-baseline")
         let samples = [("Hello, world.", "en", "zh-CN"), ("Hello, world.", "en", "zh-CN"),
                        ("你好，世界。", "zh-CN", "en"), ("• First item: a grid tile.\n• Second item: click to reveal it.", "en", "zh-CN")]
         var rows: [[String: Any]] = []
@@ -940,8 +941,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             }
             let passed = rows.count == samples.count && rows.allSatisfy { $0["success"] as? Bool == true }
             let reused = rows.count > 1 && (rows[0]["targetID"] as? String) == (rows[1]["targetID"] as? String)
-            let result: [String: Any] = ["passed": passed, "warmPageReused": reused, "samples": rows]
+            var result: [String: Any] = ["passed": passed, "warmPageReused": reused, "samples": rows,
+                                       "browserPID": BackgroundBrowser.shared.process?.processIdentifier ?? -1]
+            if let client = BackgroundBrowser.shared.client,
+               let targets = try? await client.call("Target.getTargets"),
+               let infos = targets["targetInfos"] as? [[String: Any]] {
+                result["extensionTargets"] = infos.filter { ($0["url"] as? String)?.hasPrefix("chrome-extension://") == true }.count
+                result["targetCount"] = infos.count
+                result["chromeSidebarTargets"] = infos.filter { ($0["url"] as? String)?.hasPrefix("chrome://glic") == true || (($0["type"] as? String) == "webview" && ($0["url"] as? String)?.hasPrefix("https://gemini.google.com") == true) }.count
+            }
             if let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]) { try? data.write(to: report) }
+            if CommandLine.arguments.contains("--verify-memory-hold") {
+                // Allow an external RSS sampler to inspect this owned process tree.
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+            }
             NSApp.terminate(nil)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 180) {
@@ -1643,7 +1656,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         window.isReleasedWhenClosed = false
         let title = NSTextField(labelWithString: "登录一次，之后在后台翻译")
         title.font = .boldSystemFont(ofSize: 18)
-        let instructions = NSTextField(wrappingLabelWithString: "首次点击“打开登录窗口”，在专用 Chrome 窗口登录 Google，并确认翻译页面的高级模式。完成后点击“转入后台”，浏览器窗口会关闭，翻译只显示在磨砂浮窗中。\n\n使用本机安装的 Chrome 引擎，无需扩展。专用浏览器独立保存登录状态；登录失效或需要验证时，请重新打开登录窗口。")
+        let instructions = NSTextField(wrappingLabelWithString: "首次点击“打开登录窗口”，在专用 Chrome 窗口登录 Google，并确认翻译页面的高级模式。完成后点击“转入后台”，浏览器窗口会关闭，翻译只显示在磨砂浮窗中。\n\n专用浏览器不加载扩展及浏览器侧栏，减少内存占用；Google 网页高级翻译照常使用。继续常驻以便快速翻译，登录状态独立保存。日常 Chrome 不受影响。登录失效或需要验证时，请重新打开登录窗口。")
         instructions.font = .systemFont(ofSize: 13)
         let status = NSTextField(labelWithString: BackgroundBrowser.shared.statusText)
         status.font = .systemFont(ofSize: 12)

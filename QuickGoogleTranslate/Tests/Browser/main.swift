@@ -14,8 +14,11 @@ Task { @MainActor in
     do {
         let visible = BackgroundBrowser.arguments(profile: profile, headless: false)
         check(!visible.contains(where: { $0.hasPrefix("--remote-debugging") || $0.hasPrefix("--headless") }), "manual login has no automation connection")
+        check(visible.contains("--disable-extensions"), "dedicated login browser skips extensions without deleting the profile")
         let hidden = BackgroundBrowser.arguments(profile: profile, headless: true)
         check(hidden.contains("--headless=new") && hidden.contains("--remote-debugging-address=127.0.0.1") && hidden.contains("--user-data-dir=" + profile.path), "dedicated profile and loopback debugging")
+        check(hidden.contains("--disable-extensions"), "background browser skips extensions while retaining the reusable page")
+        check(hidden.contains("--disable-features=Glic") && visible.contains("--disable-features=Glic"), "dedicated browser skips the Chrome AI sidebar without disabling the webpage model")
         if case .success("结果:first") = await translate("first") {} else { fatalError("cold startup failed") }
         check(trace("created") == 1 && trace("navigated") == 1, "cold request creates and loads one empty page")
         for text in ["second", "third", "third"] { if case .success(let result) = await translate(text) { check(result == "结果:"+text,"new input returned: "+text) } else { fatalError("reuse failed") } }

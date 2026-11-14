@@ -77,6 +77,8 @@ final class BackgroundBrowser {
     var pageSessionID: String?
     var pageLanguages: String?
     var cancellation: Task<Void, Never>?
+    // Only the manual A/B verification mode enables the old launch behavior.
+    var legacyLaunchForVerification = false
     var statusText: String {
         guard process?.isRunning == true else { return "浏览器尚未运行" }
         return mode == .login ? "登录窗口已打开 · 完成后转入后台" : "浏览器已在后台运行"
@@ -93,8 +95,9 @@ final class BackgroundBrowser {
         }
         return nil
     }
-    static func arguments(profile: URL, headless: Bool) -> [String] {
+    static func arguments(profile: URL, headless: Bool, lightweight: Bool = true) -> [String] {
         var values = ["--user-data-dir=" + profile.path, "--no-first-run", "--no-default-browser-check"]
+        if lightweight { values += ["--disable-extensions", "--disable-features=Glic"] }
         if headless { values += ["--headless=new", "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1", "about:blank"] }
         else { values += ["https://translate.google.com/?sl=en&tl=zh-CN&op=translate"] }
         return values
@@ -148,7 +151,7 @@ final class BackgroundBrowser {
         }
         let child = Process()
         child.executableURL = executableURL
-        child.arguments = Self.arguments(profile: profileURL, headless: headless)
+        child.arguments = Self.arguments(profile: profileURL, headless: headless, lightweight: !legacyLaunchForVerification)
         child.standardOutput = FileHandle.nullDevice
         child.standardError = FileHandle.nullDevice
         try child.run()

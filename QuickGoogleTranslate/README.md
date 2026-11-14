@@ -19,3 +19,5 @@
 应用图标位于 `Assets/`，使用 `build-icon.sh` 从透明 PNG 生成 macOS 标准尺寸的 ICNS；构建时打包到 Resources，提示词保存在 `Assets/ICON.md`。
 
 后台网页的忙碌状态排除 aria-hidden、零面积和透明加载图标；恢复失败返回具体阶段原因。`--verify-live-browser <报告路径>` 使用专用登录资料对固定测试句子进行真实高级翻译，仅手动执行；需先退出占用该资料的已安装应用。
+
+专用登录窗口和后台 Chrome 均通过启动参数禁用扩展与 Chrome AI 侧栏（Glic），不更改扩展安装信息或日常 Chrome 配置；Google 网页高级模型保持可用，继续常驻及热页面复用。--verify-memory-baseline 仅用于对照原有启用扩展的启动方式，--verify-memory-hold 会在固定翻译测试完成后停留 30 秒供外部内存采样。
